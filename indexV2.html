@@ -1,0 +1,2663 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Badgeuse — Restaurant 2026</title>
+<style>
+  /* ============ POLICES & VARIABLES ============ */
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Outfit:wght@300;400;500;600;700&display=swap');
+
+  :root {
+    --bg: #0f1420;
+    --bg-soft: #161d2e;
+    --panel: #1c2538;
+    --panel-2: #232e45;
+    --line: #2e3a54;
+    --ink: #eef2fb;
+    --ink-soft: #9aa7c4;
+    --ink-dim: #6b7794;
+    --accent: #f0a830;        /* ambre chaleureux restaurant */
+    --accent-2: #e8743e;      /* orange brûlé */
+    --green: #2ecc71;
+    --green-deep: #1e9e57;
+    --red: #e8556b;
+    --red2: #e8556b;
+    --rose: #e83e8c;
+    --blue: #5b9cf0;
+    --shadow: 0 18px 50px rgba(0,0,0,.45);
+    --radius: 18px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    font-family: 'Outfit', sans-serif;
+    background:
+      radial-gradient(1200px 700px at 80% -10%, rgba(240,168,48,.10), transparent 60%),
+      radial-gradient(900px 600px at -10% 110%, rgba(232,116,62,.10), transparent 55%),
+      var(--bg);
+    color: var(--ink);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  h1,h2,h3,.display { font-family: 'Fraunces', serif; font-weight: 600; letter-spacing: -.01em; }
+
+  /* ============ EN-TÊTE ============ */
+  .topbar {
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 16px 26px;
+    background: linear-gradient(180deg, rgba(28,37,56,.95), rgba(28,37,56,.75));
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+    position: sticky; top:0; z-index: 50;
+  }
+  .brand { display:flex; align-items:center; gap:14px; }
+  .brand .logo {
+    width:44px; height:44px; border-radius:13px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display:grid; place-items:center; font-size:24px;
+    box-shadow: 0 8px 20px rgba(240,168,48,.35);
+  }
+  .brand .title { font-size: 1.35rem; line-height:1.05; }
+  .brand .sub { font-size:.72rem; color:var(--ink-soft); letter-spacing:.14em; text-transform:uppercase; }
+
+  .clock {
+    text-align:right; font-variant-numeric: tabular-nums;
+  }
+  .clock .time { font-size:.78rem; color:var(--ink-soft); }
+  .clock .date { font-family:'Fraunces',serif; font-size:1.8rem; font-weight:700; line-height:1; text-transform:capitalize; }
+
+  /* ============ LAYOUT ============ */
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 26px; }
+  .screen { display:none; animation: fade .4s ease; }
+  .screen.active { display:block; }
+  @keyframes fade { from{opacity:0; transform:translateY(8px);} to{opacity:1; transform:none;} }
+
+  /* ============ CARTES SALARIÉS (badgeage) ============ */
+  .section-title { display:flex; align-items:baseline; gap:12px; margin-bottom:4px; }
+  .section-title h2 { font-size:1.7rem; }
+  .section-title .hint { color:var(--ink-soft); font-size:.9rem; }
+  .day-banner {
+    margin: 14px 0 22px; padding: 14px 18px; border-radius: 14px;
+    background: linear-gradient(135deg, rgba(91,156,240,.14), rgba(91,156,240,.05));
+    border:1px solid rgba(91,156,240,.25); color:var(--ink);
+    display:flex; align-items:center; gap:12px; font-size:.95rem;
+  }
+  .day-banner b { color: var(--blue); }
+
+  .grid {
+    display:grid; grid-template-columns: repeat(auto-fill, minmax(190px,1fr));
+    gap:16px;
+  }
+  .emp-card {
+    position:relative; cursor:pointer; border:none; text-align:left;
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border:1px solid var(--line); border-radius: var(--radius);
+    padding:18px; color:var(--ink); transition: transform .18s, box-shadow .18s, border-color .18s;
+    font-family:inherit;
+  }
+  .emp-card:hover { transform: translateY(-4px); box-shadow: var(--shadow); border-color: var(--accent); }
+  .emp-card .avatar {
+    width:52px; height:52px; border-radius:14px; display:grid; place-items:center;
+    font-family:'Fraunces',serif; font-size:1.4rem; font-weight:700; color:#1a1205;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); margin-bottom:12px;
+  }
+  .emp-card .name { font-weight:600; font-size:1.05rem; }
+  .emp-card .role { color:var(--ink-soft); font-size:.82rem; margin-top:2px; }
+  .emp-card .status {
+    margin-top:12px; font-size:.78rem; padding:5px 10px; border-radius:8px; display:inline-block;
+  }
+  .st-await { background:rgba(91,156,240,.16); color:var(--blue); }
+  .st-in { background:rgba(46,204,113,.16); color:var(--green); }
+  .st-done { background:rgba(155,167,196,.16); color:var(--ink-soft); }
+  .st-pause { background:rgba(240,168,48,.18); color:var(--accent); }
+  .st-pause-over { background:rgba(232,85,107,.20); color:#e8556b; font-weight:700; }
+  /* bouton pause repas dans la carte */
+  .emp-card .pause-action {
+    margin-top:12px; font-size:.8rem; font-weight:600; padding:8px 12px; border-radius:9px;
+    background:rgba(240,168,48,.14); color:var(--accent); border:1px solid rgba(240,168,48,.35);
+    transition:filter .15s, background .15s;
+  }
+  .emp-card .pause-action:hover { filter:brightness(1.1); }
+  /* carte en pause : liseré ambre ; en dépassement : liseré + fond rouge */
+  .emp-card.pause-on { border-color:var(--accent); box-shadow:0 0 0 2px rgba(240,168,48,.25); }
+  .emp-card.pause-over {
+    border-color:#e8556b; box-shadow:0 0 0 2px rgba(232,85,107,.35);
+    background:rgba(232,85,107,.06); animation:pulseRed 1.6s ease-in-out infinite;
+  }
+  .emp-card.pause-over .pause-action { background:rgba(232,85,107,.16); color:#e8556b; border-color:rgba(232,85,107,.4); }
+  @keyframes pulseRed { 0%,100%{box-shadow:0 0 0 2px rgba(232,85,107,.35);} 50%{box-shadow:0 0 0 4px rgba(232,85,107,.18);} }
+  .emp-card .renfort-tag {
+    position:absolute; top:14px; right:14px; font-size:.65rem; letter-spacing:.08em;
+    background:var(--accent-2); color:#fff; padding:3px 8px; border-radius:7px; text-transform:uppercase;
+  }
+
+  /* ============ BOUTONS ============ */
+  .btn {
+    font-family:inherit; font-size:.95rem; font-weight:600; cursor:pointer;
+    border:none; border-radius:12px; padding:13px 22px; transition: transform .15s, filter .15s, background .15s;
+    display:inline-flex; align-items:center; gap:9px;
+  }
+  .btn:active { transform: scale(.97); }
+  .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color:#1a1205; }
+  .btn-primary:hover { filter:brightness(1.08); }
+  .btn-ghost { background:var(--panel-2); color:var(--ink); border:1px solid var(--line); }
+  .btn-ghost:hover { border-color:var(--accent); }
+  .btn-green { background: linear-gradient(135deg, var(--green), var(--green-deep)); color:#04210f; }
+  .btn-red { background: linear-gradient(135deg, #e8556b, #c43a52); color:#fff; }
+  .btn-block { width:100%; justify-content:center; }
+  .btn-sm { padding:8px 14px; font-size:.85rem; border-radius:9px; }
+
+  /* ============ MODALE ============ */
+  .overlay {
+    position:fixed; inset:0; background:rgba(8,11,18,.72); backdrop-filter: blur(6px);
+    display:none; align-items:center; justify-content:center; z-index:100; padding:20px;
+  }
+  .overlay.active { display:flex; animation: fade .25s; }
+  .modal {
+    width:100%; max-width:480px; background:linear-gradient(180deg,var(--panel-2),var(--panel));
+    border:1px solid var(--line); border-radius:22px; padding:28px; box-shadow:var(--shadow);
+    max-height:92vh; overflow-y:auto;
+  }
+  .modal h3 { font-size:1.5rem; margin-bottom:4px; }
+  .modal .modal-sub { color:var(--ink-soft); font-size:.9rem; margin-bottom:20px; }
+  .modal-close { float:right; background:none; border:none; color:var(--ink-dim); font-size:1.6rem; cursor:pointer; line-height:1; }
+
+  /* ============ PIN PAD ============ */
+  .pin-display { display:flex; gap:12px; justify-content:center; margin:18px 0 22px; }
+  .pin-dot { width:18px; height:18px; border-radius:50%; border:2px solid var(--line); transition:.2s; }
+  .pin-dot.filled { background:var(--accent); border-color:var(--accent); transform:scale(1.1); }
+  .pinpad { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+  .pinkey {
+    font-family:'Fraunces',serif; font-size:1.5rem; font-weight:600;
+    padding:18px; border-radius:14px; background:var(--panel); border:1px solid var(--line);
+    color:var(--ink); cursor:pointer; transition: background .12s, transform .1s;
+  }
+  .pinkey:hover { background:var(--panel-2); }
+  .pinkey:active { transform:scale(.94); background:var(--accent); color:#1a1205; }
+  .pinkey.wide { grid-column: span 1; }
+
+  /* ============ SIGNATURE ============ */
+  .sig-wrap { border:2px dashed var(--line); border-radius:14px; background:#fbfcff; position:relative; }
+  .sig-wrap canvas { width:100%; height:180px; display:block; border-radius:12px; touch-action:none; cursor:crosshair; }
+  .sig-hint { position:absolute; inset:0; display:grid; place-items:center; color:#aab; pointer-events:none; font-size:.9rem; }
+
+  /* ============ FORMULAIRES ============ */
+  label.field { display:block; margin-bottom:14px; }
+  label.field span { display:block; font-size:.82rem; color:var(--ink-soft); margin-bottom:6px; }
+  input, select, textarea {
+    width:100%; font-family:inherit; font-size:.95rem; padding:12px 14px;
+    background:var(--bg-soft); border:1px solid var(--line); border-radius:11px; color:var(--ink);
+  }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); }
+  textarea { resize:vertical; min-height:70px; }
+
+  /* ============ TABLEAUX ============ */
+  .tabs { display:flex; gap:8px; margin:20px 0; flex-wrap:wrap; }
+  .tab {
+    padding:10px 18px; border-radius:11px; background:var(--panel); border:1px solid var(--line);
+    color:var(--ink-soft); cursor:pointer; font-family:inherit; font-size:.9rem; font-weight:500; transition:.15s;
+  }
+  .tab.active { background:linear-gradient(135deg,var(--accent),var(--accent-2)); color:#1a1205; border-color:transparent; }
+
+  .table-card { background:var(--panel); border:1px solid var(--line); border-radius:16px; overflow:hidden; }
+  table { width:100%; border-collapse:collapse; font-size:.88rem; }
+  th, td { padding:12px 14px; text-align:left; border-bottom:1px solid var(--line); }
+  th { background:var(--bg-soft); color:var(--ink-soft); font-weight:600; font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; }
+  tr:last-child td { border-bottom:none; }
+  td.num { font-variant-numeric:tabular-nums; text-align:right; }
+  .badge-delta { padding:3px 9px; border-radius:7px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .delta-ok { background:rgba(155,167,196,.16); color:var(--ink-soft); }
+  .delta-pos { background:rgba(46,204,113,.18); color:var(--green); }
+  .delta-neg { background:rgba(232,85,107,.18); color:#e8556b; }
+  .sig-thumb { height:34px; background:#fff; border-radius:5px; border:1px solid var(--line); }
+
+  .empty { padding:50px; text-align:center; color:var(--ink-dim); }
+  .empty .ico { font-size:2.6rem; opacity:.5; margin-bottom:10px; }
+
+  /* ============ ÉCRAN LOGIN ADMIN ============ */
+  .login-card { max-width:420px; margin:60px auto; }
+  .role-pills { display:flex; gap:10px; margin-bottom:20px; }
+  .role-pill { flex:1; text-align:center; padding:12px; border-radius:12px; background:var(--panel); border:1px solid var(--line); cursor:pointer; font-size:.85rem; transition:.15s; }
+  .role-pill.active { border-color:var(--accent); background:var(--panel-2); }
+
+  /* ============ TOAST ============ */
+  .toast-zone { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:200; display:flex; flex-direction:column; gap:10px; align-items:center; }
+  .toast {
+    background:var(--panel-2); border:1px solid var(--line); border-left:4px solid var(--accent);
+    padding:14px 20px; border-radius:12px; box-shadow:var(--shadow); font-size:.92rem; min-width:260px;
+    animation: toastIn .3s ease;
+  }
+  .toast.ok { border-left-color:var(--green); }
+  .toast.err { border-left-color:#e8556b; }
+  @keyframes toastIn { from{opacity:0; transform:translateY(12px);} to{opacity:1; transform:none;} }
+
+  .footer-nav { display:flex; justify-content:center; gap:14px; margin-top:30px; padding-bottom:20px; }
+  .pill-link { color:var(--ink-soft); font-size:.85rem; cursor:pointer; padding:8px 16px; border-radius:10px; border:1px solid transparent; }
+  .pill-link:hover { border-color:var(--line); color:var(--ink); }
+
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .row > * { flex:1; }
+  .mt { margin-top:16px; } .mb { margin-bottom:16px; }
+  .stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; margin-bottom:20px; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
+  .stat .v { font-family:'Fraunces',serif; font-size:1.9rem; font-weight:700; }
+  .stat .l { color:var(--ink-soft); font-size:.8rem; margin-top:2px; }
+  @media (max-width:640px){ .clock .date{font-size:1.3rem;} .brand .title{font-size:1.1rem;} .wrap{padding:16px;} }
+</style>
+<!-- SDK EmailJS (notification mail). Si pas d'internet, l'app bascule sur le mail pré-rempli. -->
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo">🍽️</div>
+      <div>
+        <div class="title display">Badgeuse</div>
+        <div class="sub">Restaurant 2026</div>
+      </div>
+    </div>
+    <div class="clock">
+      <div class="time" id="clkTime">--:--</div>
+      <div class="date" id="clkDate">—</div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- ÉCRAN BADGEAGE -->
+    <section id="scr-badge" class="screen active"></section>
+    <!-- ÉCRAN ADMIN (manager / dirigeant) -->
+    <section id="scr-admin" class="screen"></section>
+
+    <div class="footer-nav">
+      <span class="pill-link" onclick="App.showBadge()">🕐 Badgeage</span>
+      <span class="pill-link" onclick="App.showAdminLogin()">🔐 Espace gestion</span>
+    </div>
+  </div>
+
+  <div class="overlay" id="overlay"></div>
+  <div class="toast-zone" id="toastZone"></div>
+
+<script>
+/* ====================================================================
+   BADGEUSE — moteur de données
+   Stockage local (localStorage). Aucune dépendance externe.
+   ==================================================================== */
+"use strict";
+
+const STORE_KEY = "badgeuse_restaurant_2026_v1";
+
+/* ---- Données par défaut (équipe issue du planning) ---- */
+const DEFAULT_TEAM = [
+  { id:"e1",  nom:"Marie Dupont",    role:"Serveuse",     pin:"1111", access:"salarie" },
+  { id:"e2",  nom:"Jean Martin",     role:"Cuisinier",    pin:"2222", access:"salarie" },
+  { id:"e3",  nom:"Sophie Bernard",  role:"Hôtesse",      pin:"3333", access:"salarie" },
+  { id:"e4",  nom:"Lucas Petit",     role:"Plongeur",     pin:"4444", access:"salarie" },
+  { id:"e5",  nom:"Emma Leroy",      role:"Serveuse",     pin:"5555", access:"salarie" },
+  { id:"e6",  nom:"Thomas Moreau",   role:"Chef de rang", pin:"6666", access:"salarie" },
+  { id:"e7",  nom:"Camille Simon",   role:"Barmaid",      pin:"7777", access:"salarie" },
+  { id:"e8",  nom:"Nicolas Laurent", role:"Sous-chef",    pin:"8888", access:"salarie" },
+  { id:"e9",  nom:"Julie Roux",      role:"Serveuse",     pin:"9999", access:"salarie" },
+  { id:"e10", nom:"Pierre Girard",   role:"Manager",      pin:"1234", access:"manager" },
+  { id:"dir", nom:"Direction",       role:"Dirigeant",    pin:"0000", access:"dirigeant" }
+];
+
+/* Correspondance code horaire planning -> créneaux prévus.
+   Un code peut contenir PLUSIEURS créneaux (services coupés midi + soir).
+   Cette table reste utilisée comme "raccourci" : si la case correspond exactement,
+   on l'applique direct. Sinon on tente le parser souple ci-dessous. */
+const CODE_HORAIRES = {
+  "H 19H-23H":              { creneaux:[{debut:"19:00", fin:"23:00"}] },
+  "H 11H30-20H30":          { creneaux:[{debut:"11:30", fin:"20:30"}] },
+  "H 10H-17H":              { creneaux:[{debut:"10:00", fin:"17:00"}] },
+  "H 8H-17H":               { creneaux:[{debut:"08:00", fin:"17:00"}] },
+  "H 16H-00H":              { creneaux:[{debut:"16:00", fin:"00:00"}] },
+  // Service coupé : midi puis soir
+  "H 11H-15H30-18H30-22H30":{ creneaux:[{debut:"11:00", fin:"15:30"}, {debut:"18:30", fin:"22:30"}] }
+};
+const TOLERANCE_MIN = 5;
+const PAUSE_REPAS_MIN = 30; // seuil d'alerte (rouge) pour la pause repas
+
+/* ====================================================================
+   GESTION SOUPLE DES SALARIÉS
+   - PIN temporaire unique généré automatiquement
+   - création automatique des salariés détectés dans le fichier importé
+   ==================================================================== */
+/* Mots de la colonne A à NE PAS prendre pour des noms de salariés */
+const NON_NOMS = new Set([
+  "", "NOM", "PRENOM", "PRÉNOM", "NOM PRENOM", "SALARIE", "SALARIÉ", "SALARIES", "SALARIÉS",
+  "TOTAL", "TOTAUX", "HEURES", "HEURE", "SEMAINE", "MOIS", "JOUR", "JOURS",
+  "FICHE PERSONNEL", "PERSONNEL", "EQUIPE", "ÉQUIPE", "PLANNING"
+]);
+function estNomValide(v) {
+  const s = String(v || "").trim();
+  if (s.length < 2) return false;                  // trop court
+  if (NON_NOMS.has(s.toUpperCase())) return false; // mot réservé
+  if (/^[\d\s.,:%-]+$/.test(s)) return false;      // que des chiffres/ponctuation
+  if (!/[A-Za-zÀ-ÿ]/.test(s)) return false;        // aucune lettre
+  return true;
+}
+/* Renvoie le prochain code PIN à 4 chiffres libre (évite 0000 et les codes déjà pris) */
+function genererPin(used) {
+  for (let n = 1000; n <= 9998; n++) {
+    const s = String(n);
+    if (!used.has(s)) return s;
+  }
+  return "1000";
+}
+/* Crée dans DB.team tout salarié du fichier absent de l'app.
+   Renvoie la liste [{nom, pin}] des salariés effectivement créés. */
+function ajouterSalariesDepuisFichier(noms) {
+  const existants = new Set(DB.team.map(e => e.nom.toLowerCase().trim()));
+  const used = new Set(DB.team.map(e => e.pin));
+  const crees = [];
+  (noms || []).forEach(nomBrut => {
+    const nom = String(nomBrut || "").trim();
+    if (!estNomValide(nom)) return;
+    if (existants.has(nom.toLowerCase())) return;  // déjà présent
+    existants.add(nom.toLowerCase());
+    const pin = genererPin(used); used.add(pin);
+    const id = "e_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    DB.team.push({ id, nom, role: "Salarié", pin, access: "salarie" });
+    crees.push({ nom, pin });
+  });
+  if (crees.length) saveDB();
+  return crees;
+}
+
+/* Codes texte explicitement non-horaires (à ignorer SANS prévenir) */
+const NON_HORAIRE = new Set([
+  "-", "—", "–", "", "REPOS", "OFF", "CONGE", "CONGES", "CONGÉ", "CONGÉS",
+  "ABS", "ABSENT", "ABSENCE", "MAL", "MALADIE", "AT", "FORMATION", "FORM"
+]);
+
+/* Parser souple d'horaires.
+   Accepte par exemple : "H 8H-17H", "8H-17H", "08:00-17:00", "h 11h30-15h30-18h30-22h30",
+   "8H30 - 16H30", "8h–17h" (tiret long), etc.
+   Renvoie { creneaux: [{debut,fin}, ...] } ou null si non reconnu. */
+function parseHoraire(brut) {
+  if (brut===undefined || brut===null) return null;
+  let s = String(brut).trim();
+  if (!s) return null;
+  // normaliser : majuscules + remplacer les tirets longs + retirer le "H" initial éventuel
+  let norm = s.toUpperCase().replace(/[–—]/g, "-");
+  // retirer un éventuel "H " ou "H" en début (préfixe optionnel)
+  norm = norm.replace(/^H\s*/, "");
+  // ignorer immédiatement si c'est un code non-horaire connu
+  if (NON_HORAIRE.has(norm) || NON_HORAIRE.has(s.toUpperCase())) return null;
+  // extraire tous les nombres au format HH ou HHHmm ou HH:MM (avec H ou : comme séparateur)
+  // exemples valides : "8", "08", "8H", "8H30", "08:30", "8h30"
+  const re = /(\d{1,2})(?:[H:](\d{2}))?/g;
+  const nums = [];
+  let m;
+  while ((m = re.exec(norm)) !== null) {
+    const h = parseInt(m[1], 10);
+    const min = m[2] ? parseInt(m[2], 10) : 0;
+    if (h<0 || h>24 || min<0 || min>59) return null;
+    nums.push({ h, min });
+  }
+  // un horaire valide a 2 nombres (créneau simple) ou 4 nombres (service coupé)
+  if (nums.length !== 2 && nums.length !== 4) return null;
+  // formater "HH:MM" (24h -> 00:00, sinon zéro-pad)
+  const fmt = ({h,min}) => `${String(h===24?0:h).padStart(2,"0")}:${String(min).padStart(2,"0")}`;
+  const creneaux = [];
+  for (let i=0; i<nums.length; i+=2) {
+    creneaux.push({ debut:fmt(nums[i]), fin:fmt(nums[i+1]) });
+  }
+  return { creneaux };
+}
+
+/* ---- État applicatif ---- */
+let DB = null;
+
+function loadDB() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) { DB = JSON.parse(raw); }
+  } catch(e) { console.warn("Lecture stockage impossible", e); }
+  if (!DB) {
+    DB = {
+      team: JSON.parse(JSON.stringify(DEFAULT_TEAM)),
+      planning: {},     // { "AAAA-MM-JJ": { empId: {debut,fin,code} } }
+      renforts: {},     // { "AAAA-MM-JJ": { empId: {motif,by,at} } }
+      extras: {},       // { "AAAA-MM-JJ": { extraId: {nom,prenom,poste,commentaire,by,at} } }
+      pointages: [],    // { id, empId, date, type:"in"|"out", time:"HH:MM", ts, signature }
+      journal: [],      // { ts, who, action, detail }
+      lastPlanningName: null,
+      security: { failCount:0, locked:false, lockedAt:null },
+      settings: { emailjs:{ serviceId:"", templateId:"", publicKey:"" }, alertEmail:"", maxTries:3 },
+      lastBusinessDay: null,
+      lastBackupMonth: null
+    };
+    saveDB();
+  }
+  // garde-fous structure
+  DB.team       = DB.team || [];
+  DB.planning   = DB.planning || {};
+  DB.renforts   = DB.renforts || {};
+  DB.extras     = DB.extras || {};
+  DB.pointages  = DB.pointages || [];
+  DB.journal    = DB.journal || [];
+  DB.security   = DB.security || { failCount:0, locked:false, lockedAt:null };
+  DB.aVerifier  = DB.aVerifier || {};
+  DB.settings   = DB.settings || { emailjs:{ serviceId:"", templateId:"", publicKey:"" }, alertEmail:"", maxTries:3 };
+  if (!DB.settings.emailjs) DB.settings.emailjs = { serviceId:"", templateId:"", publicKey:"" };
+  if (!DB.settings.maxTries) DB.settings.maxTries = 3;
+  checkAutoUnlock();
+}
+
+/* Déblocage automatique : à la prochaine 8h00 après le verrouillage.
+   Renvoie true si un déblocage vient d'avoir lieu. */
+function checkAutoUnlock() {
+  if (!DB.security || !DB.security.locked || !DB.security.lockedAt) return false;
+  const lock = new Date(DB.security.lockedAt);
+  // prochaine occurrence de 8h00 strictement après l'instant de blocage
+  const unlockAt = new Date(lock.getFullYear(), lock.getMonth(), lock.getDate(), 8, 0, 0, 0);
+  if (unlockAt <= lock) unlockAt.setDate(unlockAt.getDate() + 1); // bloqué après 8h -> 8h le lendemain
+  if (Date.now() >= unlockAt.getTime()) {
+    DB.security.locked = false;
+    DB.security.failCount = 0;
+    DB.security.lockedAt = null;
+    saveDB();
+    logAction("Système", "DÉVERROUILLAGE AUTO", "Déblocage automatique à 8h00");
+    return true;
+  }
+  return false;
+}
+
+function saveDB() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
+  catch(e) { toast("Erreur d'enregistrement (stockage plein ?)", "err"); }
+}
+
+/* ---- Utilitaires date/heure ---- */
+function todayISO(d) {
+  d = d || new Date();
+  const z = n => String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;
+}
+/* Heure de bascule du "jour métier" : avant cette heure, on est encore la veille.
+   Permet aux services de nuit (fin après minuit) de pointer leur départ
+   sans que l'écran ait déjà changé de jour. La journée J commence à 6h. */
+const HEURE_BASCULE_JOUR = 6;
+function businessDayISO(d) {
+  d = d || new Date();
+  const shifted = new Date(d.getTime());
+  if (shifted.getHours() < HEURE_BASCULE_JOUR) {
+    shifted.setDate(shifted.getDate() - 1); // avant 6h => journée de la veille
+  }
+  return todayISO(shifted);
+}
+function nowHM(d) {
+  d = d || new Date();
+  const z = n => String(n).padStart(2,"0");
+  return `${z(d.getHours())}:${z(d.getMinutes())}`;
+}
+function hmToMin(hm) {
+  if (!hm) return null;
+  const [h,m] = hm.split(":").map(Number);
+  return h*60 + m;
+}
+function minToHM(min) {
+  min = ((min % 1440) + 1440) % 1440;
+  const z = n => String(n).padStart(2,"0");
+  return `${z(Math.floor(min/60))}:${z(min%60)}`;
+}
+function frDate(iso) {
+  const [y,m,d] = iso.split("-").map(Number);
+  const dt = new Date(y, m-1, d);
+  return dt.toLocaleDateString("fr-FR", { weekday:"long", day:"numeric", month:"long", year:"numeric" });
+}
+function emp(id){
+  const t = DB.team.find(e=>e.id===id);
+  if (t) return t;
+  // Extra : chercher dans tous les jours
+  for (const d in DB.extras){
+    if (DB.extras[d][id]){
+      const x = DB.extras[d][id];
+      return { id, nom:`${x.prenom} ${x.nom}`, role:x.poste, access:"extra", isExtra:true, date:d };
+    }
+  }
+  return undefined;
+}
+function getEmpByNom(nom){ return DB.team.find(e=>e.nom===nom); }
+/* Un id correspond-il à un extra ce jour-là ? */
+function estExtra(id, dateISO){ return !!(DB.extras[dateISO] && DB.extras[dateISO][id]); }
+
+/* ---- Journal ---- */
+function logAction(who, action, detail) {
+  DB.journal.unshift({ ts: Date.now(), who, action, detail });
+  saveDB();
+}
+
+/* ====================================================================
+   CALCUL RETARD / BONUS
+   Règle : solde global de la journée (minutes), additionné sur tous les créneaux.
+   Tolérance ±5 min sur arrivée ET sur départ de chaque créneau.
+   Retard = négatif, bonus = positif. Arrondi à la minute.
+   ==================================================================== */
+function calcSoldeCreneau(prevuDebut, prevuFin, reelIn, reelOut) {
+  if (!prevuDebut || !prevuFin || !reelIn || !reelOut) return null;
+  let pD = hmToMin(prevuDebut), pF = hmToMin(prevuFin);
+  let rD = hmToMin(reelIn),     rF = hmToMin(reelOut);
+  if (pF <= pD) pF += 1440; // fin après minuit
+  if (rF <= rD) rF += 1440;
+  let dArr = pD - rD;   // arrivé avant le prévu => positif (bon)
+  let dDep = rF - pF;   // parti après le prévu => positif (bon)
+  if (Math.abs(dArr) <= TOLERANCE_MIN) dArr = 0;
+  if (Math.abs(dDep) <= TOLERANCE_MIN) dDep = 0;
+  return Math.round(dArr + dDep);
+}
+/* Compat : ancien nom, un seul créneau */
+function calcSolde(pd, pf, ri, ro){ return calcSoldeCreneau(pd, pf, ri, ro); }
+
+/* Pauses repas d'un salarié un jour donné, en paires {debut, fin, debutP, finP}.
+   La dernière peut avoir fin=null (pause en cours). */
+function pausesJour(empId, dateISO) {
+  const list = DB.pointages
+    .filter(p=>p.empId===empId && p.date===dateISO && (p.type==="pause_start"||p.type==="pause_end"))
+    .sort((a,b)=>a.ts-b.ts);
+  const pauses = []; let cur = null;
+  list.forEach(p=>{
+    if (p.type==="pause_start") { cur = { debut:p.time, fin:null, debutP:p, finP:null }; pauses.push(cur); }
+    else { if (cur && cur.fin===null) { cur.fin=p.time; cur.finP=p; } }
+  });
+  return pauses;
+}
+/* Total des minutes de pause (terminées) d'un jour */
+function tempsPauseMin(empId, dateISO) {
+  let total = 0;
+  pausesJour(empId, dateISO).forEach(p=>{
+    if (p.debut && p.fin) {
+      let a = hmToMin(p.debut), b = hmToMin(p.fin);
+      if (b < a) b += 1440;
+      total += (b - a);
+    }
+  });
+  return total;
+}
+/* Y a-t-il une pause en cours (non terminée) ? renvoie l'objet pause ou null */
+function pauseEnCours(empId, dateISO) {
+  return pausesJour(empId, dateISO).find(p=>p.fin===null) || null;
+}
+
+/* Heure de fin PRÉVUE du service actuellement en cours pour ce salarié (HH:MM) ou null.
+   Sert d'anti-abus : une pause ne peut pas dépasser la fin du service prévu. */
+function finServiceEnCours(empId, dateISO) {
+  const paires = pairesJour(empId, dateISO);
+  const idxOuvert = paires.findIndex(p=>p.in && !p.out); // service en cours
+  if (idxOuvert === -1) return null;
+  const prevu = getPrevu(empId, dateISO);
+  if (!prevu || !prevu.creneaux || !prevu.creneaux[idxOuvert]) return null;
+  return prevu.creneaux[idxOuvert].fin;
+}
+
+/* Durée réelle travaillée (minutes) = présence − pauses repas */
+function tempsTravailleMin(paires, empId, dateISO) {
+  let total = 0;
+  paires.forEach(p=>{
+    if (p.in && p.out) {
+      let a = hmToMin(p.in), b = hmToMin(p.out);
+      if (b <= a) b += 1440; // créneau après minuit
+      total += (b - a);
+    }
+  });
+  // déduire les pauses repas si on connaît le salarié/jour
+  if (empId && dateISO) total -= tempsPauseMin(empId, dateISO);
+  return Math.max(0, total);
+}
+
+/* Solde du jour = somme des soldes de chaque créneau prévu, comparé au créneau réel correspondant.
+   prevu = { creneaux:[{debut,fin}, ...] } ; paires = [{in,out}, ...] (réelles, ordre chronologique)
+   Renvoie null si pas de prévu (renfort/extra/manager) ou si aucun créneau réel complet. */
+function calcSoldeJour(prevu, paires) {
+  if (!prevu || !prevu.creneaux || !prevu.creneaux.length) return null;
+  const completes = paires.filter(p=>p.in && p.out);
+  if (!completes.length) return null;
+  let solde = 0, comptes = 0;
+  // on apparie créneau prévu i avec créneau réel i (dans l'ordre)
+  prevu.creneaux.forEach((cr, i)=>{
+    const reel = completes[i];
+    if (reel) {
+      const s = calcSoldeCreneau(cr.debut, cr.fin, reel.in, reel.out);
+      if (s!==null){ solde += s; comptes++; }
+    }
+  });
+  return comptes ? solde : null;
+}
+
+/* Renvoie l'horaire prévu d'un salarié pour une date (créneaux). */
+function getPrevu(empId, dateISO) {
+  // Le Manager pointe (présence) mais n'a pas de calcul retard/bonus
+  const e = DB.team.find(t=>t.id===empId);
+  if (e && e.access==="manager") return null;
+  const p = DB.planning[dateISO];
+  if (p && p[empId]) return p[empId];
+  // Un renfort/extra imprévu n'a pas d'horaire de référence -> pas de calcul
+  return null;
+}
+/* Un salarié est-il un renfort imprévu ce jour-là ? */
+function estRenfort(empId, dateISO) {
+  return !!(DB.renforts[dateISO] && DB.renforts[dateISO][empId]);
+}
+
+/* POINT B — Le badgeage est-il devenu impossible pour ce salarié aujourd'hui ?
+   Vrai si : pas de service en cours, et tous les créneaux prévus encore "à faire"
+   ont leur heure de fin déjà dépassée. Dans ce cas, seule la Direction régularise.
+   (Renfort/extra : jamais bloqués, ils n'ont pas d'horaire de référence.) */
+function badgeageBloque(empId, dateISO) {
+  // ne s'applique qu'au jour en cours
+  if (dateISO !== App.currentDate) return false;
+  if (estRenfort(empId, dateISO) || estExtra(empId, dateISO)) return false;
+  const prevu = getPrevu(empId, dateISO);
+  if (!prevu || !prevu.creneaux) return false; // pas d'horaire de référence (ex. manager)
+  const paires = pairesJour(empId, dateISO);
+  // si un service est en cours, on peut toujours pointer le départ
+  if (paires.some(p=>p.in && !p.out)) return false;
+  const nbFaits = paires.filter(p=>p.in && p.out).length;
+  // créneaux restant à faire
+  const restants = prevu.creneaux.slice(nbFaits);
+  if (!restants.length) return false; // tout fait
+  const maintenant = hmToMin(nowHM());
+  // s'il existe au moins un créneau restant dont la fin n'est pas encore passée -> badgeage possible
+  const encorePossible = restants.some(cr=>{
+    let fin = hmToMin(cr.fin);
+    if (fin < hmToMin(cr.debut)) fin += 1440; // fin après minuit
+    return maintenant <= fin;
+  });
+  return !encorePossible; // bloqué si plus aucun créneau atteignable
+}
+
+/* Liste des salariés "prévus" un jour donné (planning + renforts activés) */
+function prevusDuJour(dateISO) {
+  const ids = new Set();
+  if (DB.planning[dateISO]) Object.keys(DB.planning[dateISO]).forEach(id=>ids.add(id));
+  if (DB.renforts[dateISO]) Object.keys(DB.renforts[dateISO]).forEach(id=>ids.add(id));
+  if (DB.extras[dateISO])   Object.keys(DB.extras[dateISO]).forEach(id=>ids.add(id));
+  return [...ids];
+}
+
+/* RÈGLE 3 — Clôture des départs oubliés pour une journée terminée.
+   Pour chaque service laissé ouvert (arrivée sans départ) :
+   - salarié avec planning  -> départ = heure de fin du créneau correspondant
+   - renfort / extra / manager (pas d'horaire) -> laissé vide (correction manuelle)
+   Retourne le nombre de départs complétés automatiquement. */
+function cloturerDepartsOublies(dateISO) {
+  let complétés = 0;
+  // 0) Clôturer d'abord toute PAUSE restée ouverte (cap à la fin de service prévue si connue)
+  const idsPause = [...new Set(DB.pointages.filter(p=>p.date===dateISO && p.type==="pause_start").map(p=>p.empId))];
+  idsPause.forEach(id=>{
+    const p = pauseEnCours(id, dateISO);
+    if (!p) return;
+    // heure de fin = fin du service en cours prévu, sinon l'heure de début de pause (durée nulle, prudent)
+    const paires = pairesJour(id, dateISO);
+    const idxOuvert = paires.findIndex(pr=>pr.in && !pr.out);
+    const planif = DB.planning[dateISO] && DB.planning[dateISO][id];
+    let finP = (planif && planif.creneaux && idxOuvert>=0 && planif.creneaux[idxOuvert]) ? planif.creneaux[idxOuvert].fin : p.debut;
+    const [h,m] = finP.split(":").map(Number);
+    const [y,mo,d] = dateISO.split("-").map(Number);
+    const ts = new Date(y,mo-1,d,h,m).getTime();
+    DB.pointages.push({ id:"pe"+Date.now()+Math.random().toString(36).slice(2,5), empId:id, date:dateISO, type:"pause_end", time:finP, ts, auto:true });
+    const e = emp(id);
+    logAction("Système", "Fin pause repas (auto)", `${e?e.nom:id} — ${dateISO} : pause clôturée à ${finP} (clôture de journée)`);
+  });
+  const ids = [...new Set(DB.pointages.filter(p=>p.date===dateISO).map(p=>p.empId))];
+  ids.forEach(id=>{
+    const paires = pairesJour(id, dateISO);
+    // index du service ouvert (arrivée sans départ)
+    const idxOuvert = paires.findIndex(p=>p.in && !p.out);
+    if (idxOuvert === -1) return; // rien d'ouvert
+    const planif = DB.planning[dateISO] && DB.planning[dateISO][id];
+    const cr = planif && planif.creneaux ? planif.creneaux[idxOuvert] : null;
+    if (cr && cr.fin) {
+      const [h,m] = cr.fin.split(":").map(Number);
+      const [y,mo,d] = dateISO.split("-").map(Number);
+      const ts = new Date(y,mo-1,d,h,m).getTime();
+      DB.pointages.push({
+        id:"auto"+Date.now()+Math.random().toString(36).slice(2,5),
+        empId:id, date:dateISO, type:"out", time:cr.fin, ts,
+        signature:"", auto:true
+      });
+      complétés++;
+      const e = DB.team.find(t=>t.id===id);
+      logAction("Système", "Départ complété (oubli)",
+        `${e?e.nom:id} — ${dateISO} : départ du service ${idxOuvert+1} fixé à ${cr.fin} (fin prévue)`);
+    } else {
+      const e = emp(id);
+      logAction("Système", "Départ manquant à corriger",
+        `${e?e.nom:id} — ${dateISO} : service sans départ, à corriger manuellement`);
+    }
+  });
+  if (complétés) saveDB();
+  return complétés;
+}
+
+/* POINT A — Repère les salariés PRÉVUS au planning mais sans AUCUN pointage ce jour.
+   Les marque "à vérifier" (DB.aVerifier) et les journalise. */
+function detecterAbsences(dateISO) {
+  const planif = DB.planning[dateISO];
+  if (!planif) return 0;
+  DB.aVerifier = DB.aVerifier || {};
+  let nb = 0;
+  Object.keys(planif).forEach(id=>{
+    const e = DB.team.find(t=>t.id===id);
+    if (e && e.access==="manager") return; // le manager n'est pas concerné par le solde
+    const aPointe = DB.pointages.some(p=>p.empId===id && p.date===dateISO);
+    if (!aPointe) {
+      if (!DB.aVerifier[dateISO]) DB.aVerifier[dateISO] = {};
+      if (!DB.aVerifier[dateISO][id]) {
+        DB.aVerifier[dateISO][id] = { statut:"a_verifier", at:Date.now() };
+        nb++;
+        logAction("Système", "Absence à vérifier",
+          `${e?e.nom:id} — ${dateISO} : prévu au planning mais aucun pointage. À trancher par la Direction.`);
+      }
+    }
+  });
+  if (nb) saveDB();
+  return nb;
+}
+
+/* Rattrapage : clôture toutes les journées terminées depuis le dernier passage.
+   Couvre le cas où la tablette est restée éteinte plusieurs jours. */
+function cloturerJoursEcoules(jourActuel) {
+  const last = DB.lastBusinessDay;
+  // jours à clôturer = toutes les dates de pointage strictement avant le jour actuel
+  // qui ont une arrivée sans départ
+  const datesAvant = [...new Set([...DB.pointages.map(p=>p.date), ...Object.keys(DB.planning||{})])].filter(dt=>dt < jourActuel);
+  datesAvant.forEach(dt=>{ cloturerDepartsOublies(dt); detecterAbsences(dt); });
+  DB.lastBusinessDay = jourActuel;
+  saveDB();
+}
+
+/* APRÈS IMPORT : sur les dates passées présentes dans le planning, lancer la
+   détection d'absences et la clôture des départs oubliés (sinon aucun flag
+   n'apparaît pour des jours déjà écoulés ajoutés via l'import). */
+function rattraperImport(jourActuel) {
+  const datesPassees = Object.keys(DB.planning||{}).filter(dt=>dt < jourActuel);
+  let flags = 0;
+  datesPassees.forEach(dt=>{ cloturerDepartsOublies(dt); flags += detecterAbsences(dt); });
+  saveDB();
+  return flags;
+}
+
+/* Tous les pointages d'un salarié un jour donné, en ordre chronologique */
+function pointagesDuJour(empId, dateISO) {
+  return DB.pointages.filter(p=>p.empId===empId && p.date===dateISO).sort((a,b)=>a.ts-b.ts);
+}
+/* Reconstitue les paires arrivée/départ d'une journée (gère les services coupés).
+   Renvoie [{in, out, inP, outP}, ...] ; le dernier peut avoir out=null (service en cours). */
+function pairesJour(empId, dateISO) {
+  const list = pointagesDuJour(empId, dateISO).filter(p=>p.type==="in" || p.type==="out");
+  const paires = [];
+  let cur = null;
+  list.forEach(p=>{
+    if (p.type==="in") {
+      if (cur && cur.out===null) { /* deux arrivées de suite : on garde la 1re */ return; }
+      cur = { in:p.time, out:null, inP:p, outP:null };
+      paires.push(cur);
+    } else { // out
+      if (cur && cur.out===null) { cur.out=p.time; cur.outP=p; }
+      else { paires.push({ in:null, out:p.time, inP:null, outP:p }); } // départ orphelin
+    }
+  });
+  return paires;
+}
+/* Compat : 1re arrivée / dernier départ de la journée */
+function pointagesJour(empId, dateISO) {
+  const list = DB.pointages.filter(p=>p.empId===empId && p.date===dateISO);
+  const inP  = list.filter(p=>p.type==="in").sort((a,b)=>a.ts-b.ts)[0] || null;
+  const outP = list.filter(p=>p.type==="out").sort((a,b)=>b.ts-a.ts)[0] || null;
+  return { inP, outP };
+}
+/* Statut du jour en tenant compte des services prévus (coupures).
+   - "await" : rien pointé
+   - "in"    : un service en cours (arrivée sans départ)
+   - "pause" : tous les services pointés jusque-là sont terminés, mais il en reste à faire
+   - "done"  : tous les services prévus sont faits */
+function statutJour(empId, dateISO) {
+  const paires = pairesJour(empId, dateISO);
+  if (!paires.length) return "await";
+  const enCours = paires.some(p=>p.in && !p.out);
+  if (enCours) return "in";
+  // tous les créneaux pointés sont terminés : reste-t-il des services prévus ?
+  const prevu = getPrevu(empId, dateISO);
+  const nbPrevus = prevu && prevu.creneaux ? prevu.creneaux.length : 1;
+  const nbFaits = paires.filter(p=>p.in && p.out).length;
+  if (nbFaits < nbPrevus) return "pause"; // coupure : il reste un service à venir
+  return "done";
+}
+
+/* ====================================================================
+   APPLICATION (UI)
+   ==================================================================== */
+const App = {
+  currentDate: businessDayISO(),
+  session: null,        // { empId, access } une fois connecté admin
+  badgeTarget: null,    // salarié en cours de badgeage
+  badgeAction: null,    // "in" | "out"
+  pinBuffer: "",
+  pinResolve: null,
+  sig: { canvas:null, ctx:null, drawing:false, dirty:false },
+
+  /* ---------- NAV ---------- */
+  showBadge() {
+    document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
+    document.getElementById("scr-badge").classList.add("active");
+    this.renderBadge();
+  },
+  showAdminLogin() {
+    document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
+    document.getElementById("scr-admin").classList.add("active");
+    this.session = null;
+    this.renderAdminLogin();
+  },
+
+  /* ---------- ÉCRAN BADGEAGE ---------- */
+  renderBadge() {
+    const date = this.currentDate;
+    const prevus = prevusDuJour(date);
+    const el = document.getElementById("scr-badge");
+
+    let banner;
+    if (Object.keys(DB.planning).length === 0) {
+      banner = `<div class="day-banner" style="border-color:rgba(232,116,62,.4); background:rgba(232,116,62,.08)">
+        ⚠️ <span>Aucun planning importé. Connectez-vous à l'<b>Espace gestion</b> puis ouvrez l'onglet <b>📥 Planning</b> pour charger les horaires prévus.</span></div>`;
+    } else if (prevus.length === 0) {
+      banner = `<div class="day-banner" style="border-color:rgba(232,116,62,.4); background:rgba(232,116,62,.08)">
+        🌙 <span>Personne n'est prévu aujourd'hui. Un renfort ? Activez-le depuis l'<b>espace gestion</b> (profil Manager).</span></div>`;
+    } else {
+      banner = `<div class="day-banner">📋 <span><b>${prevus.length}</b> salarié(s) prévu(s) aujourd'hui. Touchez votre carte pour pointer.</span></div>`;
+    }
+
+    let cards = "";
+    prevus.forEach(id=>{
+      const e = emp(id); if (!e) return;
+      const st = statutJour(id, date);
+      const paires = pairesJour(id, date);
+      const isRenfort = DB.renforts[date] && DB.renforts[date][id];
+      const isExtra = estExtra(id, date);
+      const isMgr = e.access==="manager";
+      const bloque = badgeageBloque(id, date);
+      const initials = e.nom.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
+      const enPause = pauseEnCours(id, date);
+      let stLabel, stClass;
+      if (bloque){ stLabel="⛔ Non pointé — voir gestion"; stClass="st-done"; }
+      else if (st==="await"){ stLabel="À pointer"; stClass="st-await"; }
+      else if (enPause){
+        // calcul du temps de pause écoulé (live)
+        const ecoule = Math.max(0, Math.round((Date.now()-enPause.debutP.ts)/60000));
+        const depasse = ecoule >= PAUSE_REPAS_MIN;
+        stLabel = `🍽️ En pause — ${ecoule} min`; stClass = depasse ? "st-pause-over" : "st-pause";
+      }
+      else if (st==="in"){
+        const enc = paires.find(p=>p.in && !p.out);
+        stLabel=`En service depuis ${enc.in}`; stClass="st-in";
+      }
+      else if (st==="pause"){
+        stLabel=`Pause — service suivant à pointer`; stClass="st-await";
+      }
+      else { // done : récap des créneaux
+        const segs = paires.filter(p=>p.in&&p.out).map(p=>`${p.in}→${p.out}`).join("  ·  ");
+        stLabel = segs || "Terminé"; stClass="st-done";
+      }
+      // bouton pause repas : visible si en service (pas manager, pas bloqué, pas en pause), ou bouton "fin de pause" si en pause
+      let pauseBtn = "";
+      if (!isMgr && !bloque) {
+        if (enPause) {
+          pauseBtn = `<div class="pause-action" onclick="event.stopPropagation();App.finPause('${id}')">⏹️ Fin de pause</div>`;
+        } else if (st==="in") {
+          pauseBtn = `<div class="pause-action" onclick="event.stopPropagation();App.debutPause('${id}')">🍽️ Pause repas</div>`;
+        }
+      }
+      const cardCls = enPause ? (stClass==="st-pause-over"?"emp-card pause-over":"emp-card pause-on") : "emp-card";
+      cards += `
+        <button class="${cardCls}${bloque?' card-locked':''}" onclick="App.startBadge('${id}')"${bloque?' style="opacity:.55"':''}>
+          ${isRenfort?'<span class="renfort-tag">Renfort</span>':''}
+          ${isExtra?'<span class="renfort-tag" style="background:var(--blue)">Extra</span>':''}
+          <div class="avatar">${initials}</div>
+          <div class="name">${e.nom}</div>
+          <div class="status ${stClass}">${stLabel}</div>
+          ${pauseBtn}
+        </button>`;
+    });
+
+    el.innerHTML = `
+      <div class="section-title"><h2 class="display">Pointage du jour</h2></div>
+      ${banner}
+      <div class="grid">${cards||""}</div>`;
+  },
+
+  /* ---------- DÉMARRER UN BADGEAGE ---------- */
+  startBadge(empId) {
+    const e = emp(empId);
+    const date = this.currentDate;
+    // POINT B : badgeage bloqué (heure de fin dépassée sans arrivée) -> régularisation par la gestion
+    if (badgeageBloque(empId, date)) {
+      toast(`${e.nom} : l'heure de service est passée sans pointage. La Direction doit régulariser depuis l'espace gestion.`, "err");
+      return;
+    }
+    const st = statutJour(empId, date);
+    const isRenfortExtra = estExtra(empId, date) || estRenfort(empId, date);
+    // Bloquer seulement si tous les services prévus sont faits (sauf renfort/extra qui peuvent en rajouter)
+    if (st==="done" && !isRenfortExtra) {
+      toast(`${e.nom} a déjà pointé tous ses services aujourd'hui.`, "err");
+      return;
+    }
+    this.badgeTarget = empId;
+    // si un service est en cours -> on pointe le départ ; sinon une nouvelle arrivée
+    this.badgeAction = (st==="in") ? "out" : "in";
+    // Un extra n'a pas de PIN : on va directement à la signature
+    if (estExtra(empId, date)) {
+      this.askSignature(e);
+      return;
+    }
+    // Demander le PIN puis la signature
+    this.askPin(e, (ok)=>{
+      if (!ok) { toast("Code PIN incorrect.", "err"); return; }
+      this.askSignature(e);
+    });
+  },
+
+  /* ---------- PAUSE REPAS ---------- */
+  debutPause(empId) {
+    const e = emp(empId);
+    const date = this.currentDate;
+    if (e.access==="manager") { toast("Le Manager n'est pas concerné par la pause repas.", "err"); return; }
+    if (statutJour(empId, date)!=="in") { toast("La pause n'est possible que pendant un service.", "err"); return; }
+    if (pauseEnCours(empId, date)) { toast("Une pause est déjà en cours.", "err"); return; }
+    const now = new Date();
+    DB.pointages.push({
+      id:"ps"+Date.now()+Math.random().toString(36).slice(2,5),
+      empId, date, type:"pause_start", time:nowHM(now), ts:now.getTime()
+    });
+    saveDB();
+    logAction(e.nom, "Début pause repas", `${date} à ${nowHM(now)}`);
+    toast(`${e.nom} — pause repas démarrée.`, "ok");
+    this.renderBadge();
+  },
+  finPause(empId, opts) {
+    opts = opts||{};
+    const e = emp(empId);
+    const date = this.currentDate;
+    const p = pauseEnCours(empId, date);
+    if (!p) return;
+    const now = new Date();
+    const heureFin = opts.heure || nowHM(now);
+    const tsFin = opts.ts || now.getTime();
+    DB.pointages.push({
+      id:"pe"+Date.now()+Math.random().toString(36).slice(2,5),
+      empId, date, type:"pause_end", time:heureFin, ts:tsFin, auto:!!opts.auto
+    });
+    // calcul durée
+    let debut = hmToMin(p.debut), fin = hmToMin(heureFin);
+    if (fin < debut) fin += 1440;
+    const duree = fin - debut;
+    saveDB();
+    logAction(e.nom, opts.auto?"Fin pause repas (auto)":"Fin pause repas",
+      `${date} : ${p.debut} → ${heureFin} (${duree} min déduites)${opts.auto?" — clôture automatique":""}`);
+    if (!opts.silent) toast(`${e.nom} — fin de pause (${duree} min).`, "ok");
+    this.renderBadge();
+  },
+  /* ANTI-ABUS : clôture toute pause en cours dont l'heure de fin de service prévue
+     est dépassée. La pause est arrêtée à l'heure de fin du service (pas plus tard).
+     Appelée périodiquement (tickClock). Renvoie true si au moins une pause a été clôturée. */
+  cloturerPausesDepassees() {
+    const date = this.currentDate;
+    let fait = false;
+    prevusDuJour(date).forEach(id=>{
+      const p = pauseEnCours(id, date);
+      if (!p) return;
+      const finPrev = finServiceEnCours(id, date); // HH:MM ou null
+      if (!finPrev) return;
+      const now = hmToMin(nowHM());
+      let finMin = hmToMin(finPrev);
+      // gérer fin après minuit : si la fin prévue est "avant" le début de pause, +1 jour
+      let debutPMin = hmToMin(p.debut);
+      let finCmp = finMin; if (finCmp < debutPMin) finCmp += 1440;
+      let nowCmp = now;    if (nowCmp < debutPMin) nowCmp += 1440;
+      if (nowCmp >= finCmp) {
+        // la fin de service prévue est atteinte/dépassée -> clôturer la pause À l'heure de fin prévue
+        const [h,m] = finPrev.split(":").map(Number);
+        const [y,mo,d] = date.split("-").map(Number);
+        let ts = new Date(y,mo-1,d,h,m).getTime();
+        this.finPause(id, { heure:finPrev, ts, auto:true, silent:true });
+        fait = true;
+      }
+    });
+    return fait;
+  },
+
+  /* ---------- PIN PAD ---------- */
+  askPin(e, cb) {
+    this.pinBuffer = "";
+    this.pinResolve = cb;
+    this._pinForLogin = false; // c'est un badgeage salarié, pas un login admin
+    const dots = n => Array.from({length:4},(_,i)=>`<div class="pin-dot ${i<n?'filled':''}"></div>`).join("");
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>${e.nom}</h3>
+      <div class="modal-sub">${this.badgeAction==='in'?'🟢 Pointer l’arrivée':'🔴 Pointer le départ'} · saisissez votre code PIN</div>
+      <div class="pin-display" id="pinDisplay">${dots(0)}</div>
+      <div class="pinpad">
+        ${[1,2,3,4,5,6,7,8,9].map(n=>`<button class="pinkey" onclick="App.pinPress('${n}')">${n}</button>`).join("")}
+        <button class="pinkey" onclick="App.pinClear()">⌫</button>
+        <button class="pinkey" onclick="App.pinPress('0')">0</button>
+        <button class="pinkey" onclick="App.pinPress('ok')">✓</button>
+      </div>`);
+  },
+  pinPress(k) {
+    if (k==="ok") { this.pinCheck(); return; }
+    if (this.pinBuffer.length>=4) return;
+    this.pinBuffer += k;
+    this.updatePinDots();
+    if (this.pinBuffer.length===4) setTimeout(()=>this.pinCheck(), 150);
+  },
+  pinClear(){ this.pinBuffer = this.pinBuffer.slice(0,-1); this.updatePinDots(); },
+  updatePinDots() {
+    const n = this.pinBuffer.length;
+    document.getElementById("pinDisplay").innerHTML =
+      Array.from({length:4},(_,i)=>`<div class="pin-dot ${i<n?'filled':''}"></div>`).join("");
+  },
+  pinCheck() {
+    const target = this._pinForLogin
+      ? DB.team.find(x=>x.id===this._loginTarget)
+      : emp(this.badgeTarget);
+    const cb = this.pinResolve;
+    const ok = !!target && this.pinBuffer === target.pin;
+    this.pinBuffer = "";
+    closeModal();
+    if (cb) cb(ok);
+  },
+
+  /* ---------- SIGNATURE ---------- */
+  askSignature(e) {
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>Signature</h3>
+      <div class="modal-sub">${e.nom} — ${this.badgeAction==='in'?'arrivée':'départ'} à ${nowHM()}. Signez ci-dessous pour valider.</div>
+      <div class="sig-wrap">
+        <canvas id="sigCanvas"></canvas>
+        <div class="sig-hint" id="sigHint">✍️ Signez ici avec le doigt ou la souris</div>
+      </div>
+      <div class="row mt">
+        <button class="btn btn-ghost" onclick="App.clearSig()">Effacer</button>
+        <button class="btn btn-green" onclick="App.confirmBadge()">Valider le pointage</button>
+      </div>`);
+    setTimeout(()=>this.initSig(), 60);
+  },
+  initSig() {
+    const c = document.getElementById("sigCanvas");
+    if (!c) return;
+    const rect = c.getBoundingClientRect();
+    c.width = rect.width * 2; c.height = rect.height * 2;
+    const ctx = c.getContext("2d");
+    ctx.scale(2,2); ctx.lineWidth = 2.2; ctx.lineCap="round"; ctx.lineJoin="round"; ctx.strokeStyle="#1a2238";
+    this.sig = { canvas:c, ctx, drawing:false, dirty:false };
+    const pos = ev => {
+      const r = c.getBoundingClientRect();
+      const t = ev.touches ? ev.touches[0] : ev;
+      return { x:t.clientX-r.left, y:t.clientY-r.top };
+    };
+    const start = ev => { ev.preventDefault(); this.sig.drawing=true; const p=pos(ev); ctx.beginPath(); ctx.moveTo(p.x,p.y); };
+    const move  = ev => { if(!this.sig.drawing) return; ev.preventDefault(); const p=pos(ev); ctx.lineTo(p.x,p.y); ctx.stroke(); this.sig.dirty=true; const h=document.getElementById("sigHint"); if(h)h.style.display="none"; };
+    const end   = () => { this.sig.drawing=false; };
+    c.addEventListener("mousedown",start); c.addEventListener("mousemove",move); window.addEventListener("mouseup",end);
+    c.addEventListener("touchstart",start,{passive:false}); c.addEventListener("touchmove",move,{passive:false}); c.addEventListener("touchend",end);
+  },
+  clearSig() {
+    if (!this.sig.ctx) return;
+    this.sig.ctx.clearRect(0,0,this.sig.canvas.width,this.sig.canvas.height);
+    this.sig.dirty=false;
+    const h=document.getElementById("sigHint"); if(h)h.style.display="grid";
+  },
+  confirmBadge() {
+    if (!this.sig.dirty) { toast("Merci de signer avant de valider.", "err"); return; }
+    const sigData = this.sig.canvas.toDataURL("image/png");
+    const e = emp(this.badgeTarget);
+    const now = new Date();
+    // Si on pointe le DÉPART alors qu'une pause est encore ouverte -> clôturer la pause à l'heure du départ
+    if (this.badgeAction==="out" && pauseEnCours(this.badgeTarget, this.currentDate)) {
+      this.finPause(this.badgeTarget, { heure:nowHM(now), ts:now.getTime(), auto:true, silent:true });
+    }
+    DB.pointages.push({
+      id: "p"+Date.now(),
+      empId: this.badgeTarget,
+      date: this.currentDate,
+      type: this.badgeAction,
+      time: nowHM(now),
+      ts: now.getTime(),
+      signature: sigData
+    });
+    saveDB();
+    closeModal();
+    toast(`✅ ${e.nom} — ${this.badgeAction==='in'?'arrivée':'départ'} enregistré à ${nowHM(now)}`, "ok");
+    this.renderBadge();
+  },
+
+  /* ---------- LOGIN ADMIN ---------- */
+  _loginTarget:null, _pinForLogin:false,
+  renderAdminLogin() {
+    const el = document.getElementById("scr-admin");
+    checkAutoUnlock();
+    // Système verrouillé : seul le Dirigeant peut débloquer
+    if (DB.security.locked) {
+      const since = DB.security.lockedAt ? new Date(DB.security.lockedAt).toLocaleString("fr-FR") : "";
+      el.innerHTML = `
+        <div class="modal login-card" style="border-color:var(--red)">
+          <h3 class="display" style="color:var(--red)">🔒 Système verrouillé</h3>
+          <div class="modal-sub">L'accès à l'espace gestion a été bloqué suite à des tentatives de code incorrectes${since?` (le ${since})`:''}. Il se débloquera automatiquement demain à 8h00, ou immédiatement avec le code Direction.</div>
+          <button class="btn btn-red btn-block" onclick="App.unlockPrompt()">🔓 Débloquer (code Direction)</button>
+        </div>`;
+      return;
+    }
+    const admins = DB.team.filter(e=>e.access==="manager"||e.access==="dirigeant");
+    el.innerHTML = `
+      <div class="modal login-card">
+        <h3 class="display">Espace gestion</h3>
+        <div class="modal-sub">Sélectionnez votre profil et saisissez votre code PIN.</div>
+        ${admins.map(a=>`
+          <button class="btn btn-ghost btn-block mb" onclick="App.adminLogin('${a.id}')">
+            🔐 ${a.nom} — <span style="color:var(--ink-soft)">${a.role}</span>
+          </button>`).join("")}
+        ${DB.security.failCount>0?`<p style="color:var(--ink-dim);font-size:.8rem;text-align:center;margin-top:8px">${DB.security.failCount} tentative(s) incorrecte(s). Blocage après ${DB.settings.maxTries}.</p>`:''}
+      </div>`;
+  },
+  adminLogin(id) {
+    this._loginTarget = id; this._pinForLogin = true;
+    const a = emp(id);
+    this.badgeTarget = null; this.badgeAction = null;
+    this.pinBuffer = "";
+    this.pinResolve = (ok)=>{
+      this._pinForLogin = false;
+      if (!ok) { this.onLoginFail(a); return; }
+      // succès : on remet le compteur à zéro
+      DB.security.failCount = 0; saveDB();
+      this.session = { empId:id, access:a.access };
+      this.jourConsulte = this.currentDate;
+      logAction(a.nom, "Connexion", `Accès ${a.access}`);
+      this.renderAdminPanel();
+    };
+    const dots = n => Array.from({length:4},(_,i)=>`<div class="pin-dot ${i<n?'filled':''}"></div>`).join("");
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>${a.nom}</h3>
+      <div class="modal-sub">Code PIN — accès ${a.role}</div>
+      <div class="pin-display" id="pinDisplay">${dots(0)}</div>
+      <div class="pinpad">
+        ${[1,2,3,4,5,6,7,8,9].map(n=>`<button class="pinkey" onclick="App.pinPress('${n}')">${n}</button>`).join("")}
+        <button class="pinkey" onclick="App.pinClear()">⌫</button>
+        <button class="pinkey" onclick="App.pinPress('0')">0</button>
+        <button class="pinkey" onclick="App.pinPress('ok')">✓</button>
+      </div>`);
+  },
+  /* échec de connexion : incrémente, et verrouille si seuil atteint */
+  onLoginFail(a) {
+    DB.security.failCount = (DB.security.failCount||0) + 1;
+    const restantes = DB.settings.maxTries - DB.security.failCount;
+    logAction(a?a.nom:"(inconnu)", "Code gestion incorrect", `Tentative ${DB.security.failCount}/${DB.settings.maxTries}`);
+    if (DB.security.failCount >= DB.settings.maxTries) {
+      DB.security.locked = true;
+      DB.security.lockedAt = Date.now();
+      saveDB();
+      logAction("Système", "VERROUILLAGE", `Bloqué après ${DB.settings.maxTries} tentatives incorrectes`);
+      this.notifyLock();
+      this.renderAdminLogin();
+      toast("Système verrouillé. Contactez la Direction.", "err");
+    } else {
+      saveDB();
+      toast(`Code incorrect. ${restantes} tentative(s) restante(s).`, "err");
+    }
+  },
+  /* déblocage par le Dirigeant */
+  unlockPrompt() {
+    const dir = DB.team.find(e=>e.access==="dirigeant");
+    this._loginTarget = dir.id; this._pinForLogin = true;
+    this.pinBuffer = "";
+    this.pinResolve = (ok)=>{
+      this._pinForLogin = false;
+      if (!ok) { toast("Code Direction incorrect.", "err"); return; }
+      DB.security.locked = false; DB.security.failCount = 0; DB.security.lockedAt = null;
+      saveDB();
+      logAction(dir.nom, "DÉVERROUILLAGE", "Système débloqué par la Direction");
+      toast("Système débloqué.", "ok");
+      this.renderAdminLogin();
+    };
+    const dots = n => Array.from({length:4},(_,i)=>`<div class="pin-dot ${i<n?'filled':''}"></div>`).join("");
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>Déblocage Direction</h3>
+      <div class="modal-sub">Saisissez le code PIN du Dirigeant pour débloquer le système.</div>
+      <div class="pin-display" id="pinDisplay">${dots(0)}</div>
+      <div class="pinpad">
+        ${[1,2,3,4,5,6,7,8,9].map(n=>`<button class="pinkey" onclick="App.pinPress('${n}')">${n}</button>`).join("")}
+        <button class="pinkey" onclick="App.pinClear()">⌫</button>
+        <button class="pinkey" onclick="App.pinPress('0')">0</button>
+        <button class="pinkey" onclick="App.pinPress('ok')">✓</button>
+      </div>`);
+  },
+  /* notification de verrouillage : EmailJS si configuré + internet, sinon journal seul */
+  notifyLock() {
+    const s = DB.settings;
+    const when = new Date().toLocaleString("fr-FR");
+    const subject = "⚠️ Badgeuse — tentatives d'accès à l'espace gestion";
+    const body = `Le système de badgeage a été VERROUILLÉ le ${when} après ${s.maxTries} tentatives de code incorrectes sur l'espace gestion.\n\nIl se débloquera automatiquement demain à 8h00, ou immédiatement avec le code Direction sur la tablette.`;
+    const cfg = s.emailjs || {};
+    const online = (typeof navigator==="undefined") ? true : navigator.onLine;
+    const canAuto = window.emailjs && online && cfg.serviceId && cfg.templateId && cfg.publicKey && s.alertEmail;
+    if (canAuto) {
+      try {
+        window.emailjs.init({ publicKey: cfg.publicKey });
+        window.emailjs.send(cfg.serviceId, cfg.templateId, {
+          to_email: s.alertEmail, subject, message: body, when, tries: s.maxTries
+        }).then(()=>{
+          logAction("Système", "Mail d'alerte envoyé", `À ${s.alertEmail}`);
+        }).catch(err=>{
+          logAction("Système", "Mail non envoyé (erreur réseau)", "Alerte conservée au journal");
+        });
+      } catch(e) {
+        logAction("Système", "Mail non envoyé", "Alerte conservée au journal");
+      }
+    } else {
+      // Pas d'internet ou non configuré : on consigne uniquement dans le journal
+      logAction("Système", "Alerte non envoyée (hors ligne ou non configuré)", "Verrouillage consigné au journal");
+    }
+  },
+
+  /* ---------- RAPPEL DE SAUVEGARDE MENSUELLE ----------
+     Au lancement, si un nouveau mois a commencé et qu'aucune sauvegarde
+     complète n'a été faite ce mois-ci, on affiche un rappel à la Direction/au Manager. */
+  rappelSauvegardeDue() {
+    const moisActuel = todayISO().slice(0,7); // AAAA-MM
+    return DB.lastBackupMonth !== moisActuel;
+  },
+  verifierRappelSauvegarde() {
+    if (this.rappelSauvegardeDue()) {
+      // on journalise une seule fois par mois le fait que la sauvegarde est due
+      const moisActuel = todayISO().slice(0,7);
+      if (DB._rappelLogMonth !== moisActuel) {
+        DB._rappelLogMonth = moisActuel;
+        logAction("Système", "Rappel sauvegarde", `Sauvegarde mensuelle non encore effectuée pour ${moisActuel}`);
+        saveDB();
+      }
+    }
+  },
+
+  /* ---------- PANNEAU ADMIN ---------- */
+  adminTab: "jour",
+  renderAdminPanel() {
+    const a = emp(this.session.empId);
+    const isDir = this.session.access==="dirigeant";
+    const el = document.getElementById("scr-admin");
+    el.innerHTML = `
+      <div class="section-title">
+        <h2 class="display">Bonjour, ${a.nom.split(" ")[0]}</h2>
+        <span class="hint">Accès ${a.role} ${isDir?'(total)':'(étendu)'}</span>
+      </div>
+      ${this.rappelSauvegardeDue()?`
+      <div class="day-banner" style="border-color:rgba(240,168,48,.5);background:rgba(240,168,48,.10);cursor:pointer" onclick="App.setTab('export')">
+        🛟 <span><b>Pensez à votre sauvegarde du mois.</b> Aucune sauvegarde complète n'a encore été faite ce mois-ci. Cliquez ici pour la télécharger (onglet Export).</span>
+      </div>`:''}
+      <div class="tabs">
+        <button class="tab ${this.adminTab==='jour'?'active':''}" onclick="App.setTab('jour')">📅 Aujourd'hui</button>
+        <button class="tab ${this.adminTab==='mois'?'active':''}" onclick="App.setTab('mois')">📊 Récap mensuel</button>
+        <button class="tab ${this.adminTab==='planning'?'active':''}" onclick="App.setTab('planning')">📥 Planning</button>
+        <button class="tab ${this.adminTab==='renfort'?'active':''}" onclick="App.setTab('renfort')">➕ Renfort imprévu</button>
+        <button class="tab ${this.adminTab==='extra'?'active':''}" onclick="App.setTab('extra')">🧑‍🍳 Extras</button>
+        <button class="tab ${this.adminTab==='pins'?'active':''}" onclick="App.setTab('pins')">🔑 Salariés &amp; PIN</button>
+        <button class="tab ${this.adminTab==='journal'?'active':''}" onclick="App.setTab('journal')">📝 Journal</button>
+        <button class="tab ${this.adminTab==='export'?'active':''}" onclick="App.setTab('export')">💾 Export</button>
+        ${isDir?`<button class="tab ${this.adminTab==='params'?'active':''}" onclick="App.setTab('params')">⚙️ Paramètres</button>`:''}
+      </div>
+      <div id="adminContent"></div>
+      <div class="footer-nav"><span class="pill-link" onclick="App.logout()">↩ Se déconnecter</span></div>`;
+    this.renderTab();
+  },
+  setTab(t){ this.adminTab=t; this.renderAdminPanel(); },
+  logout(){ const a=emp(this.session.empId); logAction(a.nom,"Déconnexion",""); this.session=null; this.showBadge(); },
+
+  renderTab() {
+    const c = document.getElementById("adminContent");
+    if (this.adminTab==="jour")    return this.tabJour(c);
+    if (this.adminTab==="mois")    return this.tabMois(c);
+    if (this.adminTab==="planning") return this.tabPlanning(c);
+    if (this.adminTab==="renfort") return this.tabRenfort(c);
+    if (this.adminTab==="extra")   return this.tabExtra(c);
+    if (this.adminTab==="pins")    return this.tabPins(c);
+    if (this.adminTab==="journal") return this.tabJournal(c);
+    if (this.adminTab==="export")  return this.tabExport(c);
+    if (this.adminTab==="params")  return this.session.access==="dirigeant" ? this.tabParams(c) : this.tabJour(c);
+  },
+
+  /* ----- onglet AUJOURD'HUI : pointages du jour + édition ----- */
+  jourConsulte: null,
+  tabJour(c) {
+    if (!this.jourConsulte) this.jourConsulte = this.currentDate;
+    const date = this.jourConsulte;
+    const prevus = prevusDuJour(date);
+    let rows = "";
+    prevus.forEach(id=>{
+      const e = emp(id); if(!e) return;
+      const paires = pairesJour(id, date);
+      const prevu = getPrevu(id, date);
+      const renfort = estRenfort(id, date);
+      const extra = estExtra(id, date);
+      const isMgr = e.access==="manager";
+      const solde = calcSoldeJour(prevu, paires);
+      // Label "Prévu" : liste des créneaux, ou statut spécial
+      let prevuLabel;
+      if (prevu && prevu.creneaux) {
+        prevuLabel = prevu.creneaux.map(cr=>`${cr.debut}→${cr.fin}`).join('<br>');
+      } else if (isMgr) prevuLabel = '<span style="color:var(--ink-soft)">Présence</span>';
+      else if (renfort) prevuLabel = '<span style="color:var(--accent-2)">Renfort</span>';
+      else if (extra)   prevuLabel = '<span style="color:var(--blue)">Extra</span>';
+      else prevuLabel = '—';
+      // Réel : liste des créneaux pointés
+      const aVerif = DB.aVerifier && DB.aVerifier[date] && DB.aVerifier[date][id] && !paires.length;
+      const bloque = badgeageBloque(id, date);
+      let reelLabel;
+      if (paires.length) {
+        reelLabel = paires.map(p=>`${p.in||'—'} → ${p.out||'<span style="color:var(--ink-dim)">en cours</span>'}`).join('<br>');
+      } else if (aVerif) {
+        reelLabel = '<span style="color:#e8556b;font-weight:600">⚠️ Absence à vérifier</span>';
+      } else if (bloque) {
+        reelLabel = '<span style="color:#e8556b;font-weight:600">⛔ Non pointé — à régulariser</span>';
+      } else {
+        reelLabel = '<span style="color:var(--ink-dim)">—</span>';
+      }
+      // temps travaillé (pauses déduites)
+      const tt = tempsTravailleMin(paires, id, date);
+      const ttLabel = tt>0 ? `${Math.floor(tt/60)}h${String(tt%60).padStart(2,'0')}` : '—';
+      // pause repas déduite
+      const pauseMin = tempsPauseMin(id, date);
+      const enPauseLive = pauseEnCours(id, date);
+      let pauseLabel;
+      if (enPauseLive) pauseLabel = '<span style="color:var(--accent)">en cours…</span>';
+      else if (pauseMin>0) pauseLabel = `−${pauseMin} min`;
+      else pauseLabel = '—';
+      // signature : on prend la 1re disponible
+      const sig = paires.find(p=>p.inP&&p.inP.signature)?.inP.signature
+                || paires.find(p=>p.outP&&p.outP.signature)?.outP.signature || '';
+      const rowStyle = (aVerif||bloque) ? ' style="background:rgba(232,85,107,.07)"' : '';
+      rows += `<tr${rowStyle}>
+        <td>${e.nom}<div style="color:var(--ink-soft);font-size:.78rem">${e.role}</div></td>
+        <td class="num" style="font-size:.82rem">${prevuLabel}</td>
+        <td class="num" style="font-size:.82rem">${reelLabel}</td>
+        <td class="num" style="font-size:.82rem">${pauseLabel}</td>
+        <td class="num">${ttLabel}</td>
+        <td class="num">${this.soldeBadge(solde)}</td>
+        <td>${sig?`<img class="sig-thumb" src="${sig}">`:''}</td>
+        <td><button class="btn btn-ghost btn-sm" onclick="App.editPointage('${id}')">${(aVerif||bloque)?'Régulariser':'Modifier'}</button></td>
+      </tr>`;
+    });
+    const estAujourdhui = (date === this.currentDate);
+    const bandeau = estAujourdhui ? '' :
+      `<div class="day-banner" style="border-color:rgba(240,168,48,.4);background:rgba(240,168,48,.08)">
+        🗓️ <span>Vous consultez le <b>${frDate(date)}</b> (jour passé). Vous pouvez régulariser les pointages ici.
+        <span class="pill-link" style="display:inline;padding:2px 8px" onclick="App.jourConsulte=App.currentDate;App.renderAdminPanel()">Revenir à aujourd'hui</span></span></div>`;
+    const selecteur = `
+      <div class="row mb" style="align-items:flex-end">
+        <label class="field" style="max-width:220px"><span>Jour consulté</span>
+          <input type="date" id="jourInput" value="${date}" max="${this.currentDate}"
+            onchange="App.jourConsulte=this.value;App.renderAdminPanel()"></label>
+      </div>`;
+    c.innerHTML = `${selecteur}${bandeau}` + (prevus.length ? `
+      <div class="table-card"><table>
+        <thead><tr><th>Salarié</th><th>Prévu</th><th>Réel (services)</th><th>Pause</th><th>Travaillé</th><th>Ponctualité</th><th>Signature</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <p style="color:var(--ink-soft);font-size:.82rem;margin-top:12px">« Pause » = temps de pause repas déduit. « Travaillé » = présence réelle moins coupures et pauses. « Ponctualité » = retard/bonus cumulé sur les services prévus.</p>`
+      : `<div class="empty"><div class="ico">🗓️</div>Personne n'était prévu ce jour-là.</div>`);
+  },
+  soldeBadge(solde) {
+    if (solde===null) return '<span class="badge-delta delta-ok">—</span>';
+    if (solde===0)    return '<span class="badge-delta delta-ok">à l’heure</span>';
+    if (solde>0)      return `<span class="badge-delta delta-pos">+${solde} min</span>`;
+    return `<span class="badge-delta delta-neg">${solde} min</span>`;
+  },
+
+  /* ----- ÉDITION D'UN POINTAGE (avec règles de sécurité) ----- */
+  editPointage(empId) {
+    const e = emp(empId);
+    const isSelf = empId === this.session.empId;
+    const isManager = this.session.access==="manager";
+    // Règle : le manager NE PEUT PAS modifier ses propres heures
+    if (isManager && isSelf) {
+      toast("Un manager ne peut pas modifier ses propres heures. Seul le dirigeant le peut.", "err");
+      return;
+    }
+    const date = this.jourConsulte || this.currentDate;
+    const { inP, outP } = pointagesJour(empId, date);
+    const needComment = true; // commentaire obligatoire pour toute modif d'un salarié
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>${(DB.aVerifier&&DB.aVerifier[date]&&DB.aVerifier[date][empId])||badgeageBloque(empId,date)?'Régulariser':'Modifier'} — ${e.nom}</h3>
+      <div class="modal-sub">${frDate(date)}</div>
+      <label class="field"><span>Heure d'arrivée</span>
+        <input type="time" id="edIn" value="${inP?inP.time:''}"></label>
+      <label class="field"><span>Heure de départ</span>
+        <input type="time" id="edOut" value="${outP?outP.time:''}"></label>
+      <label class="field"><span>Commentaire (obligatoire) — motif précis de la modification</span>
+        <textarea id="edComment" placeholder="Ex. : oubli de pointage le midi, badgé manuellement après vérification"></textarea></label>
+      <p style="font-size:.76rem;color:var(--ink-dim);margin:-6px 0 14px;line-height:1.5">
+        ⚠️ Règles : pas d'heure dans le futur · l'arrivée ne peut qu'être <b>retardée</b>, le départ qu'<b>avancé</b> (impossible d'ajouter des heures).</p>
+      <div class="row mt">
+        <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="App.saveEditPointage('${empId}')">Enregistrer</button>
+      </div>`);
+  },
+  saveEditPointage(empId) {
+    const e = emp(empId);
+    const date = this.jourConsulte || this.currentDate;
+    const newIn = document.getElementById("edIn").value;
+    const newOut = document.getElementById("edOut").value;
+    const comment = document.getElementById("edComment").value.trim();
+    if (!comment) { toast("Le commentaire est obligatoire pour modifier un horaire.", "err"); return; }
+    const { inP, outP } = pointagesJour(empId, date);
+    const oldIn = inP?inP.time:"—", oldOut = outP?outP.time:"—";
+
+    // --- RÈGLE 1 : pas d'heure dans le futur ---
+    const now = new Date();
+    const tsOf = (hm)=>{ if(!hm) return null; const [h,m]=hm.split(":").map(Number); const [y,mo,d]=date.split("-").map(Number); return new Date(y,mo-1,d,h,m).getTime(); };
+    // pour gérer un départ après minuit (service de nuit), on tolère le lendemain matin
+    const futureCheck = (hm, label)=>{
+      if(!hm) return true;
+      const t = tsOf(hm);
+      if (t > now.getTime() + 60000) { // tolérance 1 min
+        toast(`${label} : impossible de saisir une heure dans le futur.`, "err");
+        return false;
+      }
+      return true;
+    };
+    if (!futureCheck(newIn, "Arrivée")) return;
+    if (!futureCheck(newOut, "Départ")) return;
+
+    // --- RÈGLE 2 : une modification ne peut que RÉDUIRE le temps de présence ---
+    // Arrivée : ne peut être que retardée (>= ancienne). Départ : ne peut être qu'avancé (<= ancien).
+    if (inP && newIn) {
+      if (tsOf(newIn) < tsOf(oldIn) - 60000) {
+        toast("L'arrivée ne peut être que retardée, pas avancée (anti-ajout d'heures).", "err");
+        return;
+      }
+    }
+    if (outP && newOut) {
+      if (tsOf(newOut) > tsOf(oldOut) + 60000) {
+        toast("Le départ ne peut être qu'avancé, pas repoussé (anti-ajout d'heures).", "err");
+        return;
+      }
+    }
+
+    const who = emp(this.session.empId).nom;
+    // appliquer (on remplace/crée les pointages, en gardant signature existante si présente)
+    this._setPointage(empId, date, "in", newIn, inP);
+    this._setPointage(empId, date, "out", newOut, outP);
+    // si la Direction régularise, on lève le flag "à vérifier"
+    if ((newIn || newOut) && DB.aVerifier && DB.aVerifier[date] && DB.aVerifier[date][empId]) {
+      delete DB.aVerifier[date][empId];
+    }
+    saveDB();
+    logAction(who, "Modification horaire",
+      `${e.nom} — ${date} : arrivée ${oldIn}→${newIn||'—'}, départ ${oldOut}→${newOut||'—'}. Motif : ${comment}`);
+    closeModal();
+    toast("Horaire modifié et journalisé.", "ok");
+    this.renderAdminPanel();
+  },
+  _setPointage(empId, date, type, hm, existing) {
+    // retire les anciens pointages de ce type pour ce jour
+    DB.pointages = DB.pointages.filter(p=>!(p.empId===empId && p.date===date && p.type===type));
+    if (!hm) return; // si vide => supprimé
+    const [h,m] = hm.split(":").map(Number);
+    const [y,mo,d] = date.split("-").map(Number);
+    const ts = new Date(y,mo-1,d,h,m).getTime();
+    DB.pointages.push({
+      id:"p"+Date.now()+Math.random().toString(36).slice(2,5),
+      empId, date, type, time:hm, ts,
+      signature: existing?existing.signature : "",
+      editedBy: emp(this.session.empId).nom
+    });
+  },
+
+  /* ----- onglet RÉCAP MENSUEL ----- */
+  moisSel: null,
+  tabMois(c) {
+    if (!this.moisSel) this.moisSel = this.currentDate.slice(0,7);
+    // toutes les dates de pointage du mois
+    const moisISO = this.moisSel;
+    // construire pour chaque salarié la somme des soldes du mois + total jours
+    const lignes = DB.team.filter(e=>e.access==="salarie").map(e=>{
+      let soldeTotal = 0, jours = 0, retardJours = 0, bonusJours = 0, minTravaillees = 0;
+      // parcourir les jours du mois où il y a un prévu OU un pointage
+      const dates = new Set();
+      Object.keys(DB.planning).forEach(d=>{ if(d.startsWith(moisISO)&&DB.planning[d][e.id]) dates.add(d); });
+      Object.keys(DB.renforts).forEach(d=>{ if(d.startsWith(moisISO)&&DB.renforts[d][e.id]) dates.add(d); });
+      DB.pointages.forEach(p=>{ if(p.empId===e.id&&p.date.startsWith(moisISO)) dates.add(p.date); });
+      dates.forEach(d=>{
+        const paires = pairesJour(e.id, d);
+        const prevu = getPrevu(e.id, d);
+        const s = calcSoldeJour(prevu, paires);
+        minTravaillees += tempsTravailleMin(paires, e.id, d);
+        if (s!==null){ soldeTotal+=s; jours++; if(s<0)retardJours++; if(s>0)bonusJours++; }
+      });
+      return { e, soldeTotal, jours, retardJours, bonusJours, minTravaillees };
+    }).filter(l=>l.jours>0 || l.minTravaillees>0);
+
+    const moisLabel = new Date(moisISO+"-01").toLocaleDateString("fr-FR",{month:"long",year:"numeric"});
+    const fmtH = m => `${Math.floor(m/60)}h${String(m%60).padStart(2,'0')}`;
+    let rows = lignes.map(l=>`<tr>
+        <td>${l.e.nom}<div style="color:var(--ink-soft);font-size:.78rem">${l.e.role}</div></td>
+        <td class="num">${l.jours}</td>
+        <td class="num">${fmtH(l.minTravaillees)}</td>
+        <td class="num">${l.retardJours}</td>
+        <td class="num">${l.bonusJours}</td>
+        <td class="num">${this.soldeBadge(l.soldeTotal)}</td>
+      </tr>`).join("");
+
+    c.innerHTML = `
+      <div class="row mb">
+        <label class="field" style="max-width:220px"><span>Mois</span>
+          <input type="month" id="moisInput" value="${moisISO}" onchange="App.moisSel=this.value;App.renderAdminPanel()"></label>
+      </div>
+      <div class="table-card"><table>
+        <thead><tr><th>Salarié</th><th>Jours pointés</th><th>Temps travaillé</th><th>Jours retard</th><th>Jours bonus</th><th>Ponctualité du mois</th></tr></thead>
+        <tbody>${rows||`<tr><td colspan="6" class="empty">Aucune donnée pour ${moisLabel}.</td></tr>`}</tbody>
+      </table></div>
+      <p style="color:var(--ink-soft);font-size:.82rem;margin-top:12px">
+        « Temps travaillé » = heures réelles cumulées (coupures et pauses repas déduites). Ponctualité négative = retard cumulé, positive = bonus. Tolérance ±${TOLERANCE_MIN} min.</p>`;
+  },
+
+  /* ----- onglet PLANNING : import du fichier xlsx (manager + dirigeant) ----- */
+  tabPlanning(c) {
+    const last = DB.lastPlanningName || "(aucun planning encore importé)";
+    const nbJours = Object.keys(DB.planning||{}).length;
+    const inco = DB._dernieresInconnues || {};
+    const incoEntries = Object.entries(inco);
+    const totInco = incoEntries.reduce((a,b)=>a+b[1],0);
+    const incoBloc = incoEntries.length ? `
+      <div style="margin-top:22px;padding:14px 16px;border:1px solid rgba(232,85,107,.4);background:rgba(232,85,107,.08);border-radius:10px">
+        <div style="font-weight:600;color:#e8556b;margin-bottom:8px">⚠️ ${totInco} case(s) non reconnue(s) au dernier import</div>
+        <p style="margin:0 0 10px;font-size:.85rem;color:var(--ink-soft);line-height:1.55">
+          Ces valeurs n'ont pas pu être interprétées comme un horaire et ont été ignorées. Vérifiez l'orthographe dans le fichier Excel et réimportez. Vous pouvez aussi écrire les horaires sous différentes formes : <i>« H 9H-17H »</i>, <i>« 9H-17H »</i>, <i>« 09:00-17:00 »</i> ou même <i>« H 11H30-15H30-18H30-22H30 »</i> pour un service coupé.</p>
+        <ul style="margin:6px 0 0 18px;padding:0;font-size:.86rem">
+          ${incoEntries.sort((a,b)=>b[1]-a[1]).map(([val,nb])=>`<li><code style="background:rgba(0,0,0,.08);padding:1px 6px;border-radius:4px">${val.replace(/</g,'&lt;')}</code> — ${nb} occurrence(s)</li>`).join("")}
+        </ul>
+      </div>` : '';
+    c.innerHTML = `
+      <div class="table-card" style="padding:24px">
+        <h3 style="margin-top:0">📥 Importer le planning</h3>
+        <p style="color:var(--ink-soft);font-size:.9rem;margin-bottom:18px">
+          Chargez le fichier <b>planning_restaurant_2026.xlsx</b> (ou le mois souhaité). L'app lit les horaires prévus pour chaque salarié et les applique au calendrier.<br>
+          ✨ Les salariés présents dans le fichier mais absents de l'app sont <b>créés automatiquement</b> avec un code PIN temporaire (affiché après l'import et consigné au Journal).</p>
+
+        <label class="field"><span>Fichier planning (.xlsx)</span>
+          <input type="file" id="planFile" accept=".xlsx"></label>
+        <button class="btn btn-primary btn-block" onclick="App.doImport()">📥 Lire et importer</button>
+
+        <div style="margin-top:22px;padding-top:18px;border-top:1px solid var(--line);font-size:.86rem;color:var(--ink-soft)">
+          <div><b>Dernier fichier importé :</b> ${last}</div>
+          <div><b>Jours présents dans le planning :</b> ${nbJours}</div>
+        </div>
+        ${incoBloc}
+
+        <p style="font-size:.78rem;color:var(--ink-dim);margin-top:18px;line-height:1.55">
+          ℹ️ Formats acceptés dans les cases d'horaires : <b>« H 8H-17H »</b>, <b>« 8H-17H »</b>, <b>« 08:00-17:00 »</b>, ou un service coupé <b>« H 11H-15H30-18H30-22H30 »</b>. Majuscules/minuscules indifférentes. Les cases vides ou marquées <i>« - », « Conges », « Abs », « Mal »</i> sont ignorées normalement.<br>
+          Si vous importez un planning modifié, les changements détectés sur des jours déjà connus exigeront un commentaire (manager). Les jours déjà pointés/clôturés sont automatiquement protégés.</p>
+      </div>`;
+  },
+
+  /* ----- onglet RENFORT IMPRÉVU ----- */
+  tabRenfort(c) {
+    const date = this.currentDate;
+    const dispo = DB.team.filter(e=>e.access!=="dirigeant" && !prevusDuJour(date).includes(e.id));
+    c.innerHTML = `
+      <p style="color:var(--ink-soft);font-size:.9rem;margin-bottom:16px">
+        Activez un salarié non prévu aujourd'hui (appelé en renfort). Il apparaîtra alors dans l'écran de badgeage.</p>
+      <div class="row mb">
+        <label class="field"><span>Salarié à activer</span>
+          <select id="rfEmp">${dispo.map(e=>`<option value="${e.id}">${e.nom} — ${e.role}</option>`).join("")||'<option>Tous déjà prévus</option>'}</select></label>
+      </div>
+      <label class="field"><span>Motif (obligatoire)</span>
+        <textarea id="rfMotif" placeholder="Ex. : gros service réservation 40 couverts, renfort en salle"></textarea></label>
+      <button class="btn btn-primary btn-block" onclick="App.activerRenfort()">➕ Activer ce renfort</button>
+      <p style="font-size:.78rem;color:var(--ink-dim);margin-top:12px">
+        Le renfort apparaîtra sur la pointeuse et pourra badger arrivée/départ. Ses heures sont comptées telles quelles (pas de calcul retard/bonus, car aucun horaire n'était prévu).</p>
+      ${this.renfortListHtml(date)}`;
+  },
+  renfortListHtml(date) {
+    const r = DB.renforts[date]||{};
+    const ids = Object.keys(r);
+    if (!ids.length) return "";
+    return `<div class="mt"><h3 style="font-size:1.1rem;margin:18px 0 10px">Renforts activés aujourd'hui</h3>
+      <div class="table-card"><table><thead><tr><th>Salarié</th><th>Motif</th><th>Par</th><th></th></tr></thead><tbody>
+      ${ids.map(id=>`<tr><td>${emp(id)?.nom||id}</td>
+        <td>${r[id].motif}</td><td>${r[id].by}</td>
+        <td><button class="btn btn-red btn-sm" onclick="App.retirerRenfort('${id}')">Retirer</button></td></tr>`).join("")}
+      </tbody></table></div></div>`;
+  },
+  activerRenfort() {
+    const date = this.currentDate;
+    const id = document.getElementById("rfEmp").value;
+    const motif = document.getElementById("rfMotif").value.trim();
+    if (!emp(id)) { toast("Sélectionnez un salarié.", "err"); return; }
+    if (!motif) { toast("Le motif est obligatoire pour un renfort.", "err"); return; }
+    if (!DB.renforts[date]) DB.renforts[date] = {};
+    DB.renforts[date][id] = { motif, by: emp(this.session.empId).nom, at: Date.now() };
+    saveDB();
+    logAction(emp(this.session.empId).nom, "Activation renfort",
+      `${emp(id).nom} — ${date}. Motif : ${motif}`);
+    toast(`${emp(id).nom} activé en renfort.`, "ok");
+    this.renderAdminPanel();
+  },
+  retirerRenfort(id) {
+    const date = this.currentDate;
+    if (DB.renforts[date]) { delete DB.renforts[date][id]; saveDB(); }
+    logAction(emp(this.session.empId).nom, "Retrait renfort", `${emp(id)?.nom} — ${date}`);
+    this.renderAdminPanel();
+  },
+
+  /* ----- onglet EXTRAS (personnes externes ponctuelles) ----- */
+  tabExtra(c) {
+    const date = this.currentDate;
+    c.innerHTML = `
+      <p style="color:var(--ink-soft);font-size:.9rem;margin-bottom:16px">
+        Ajoutez une personne externe en extra pour aujourd'hui (non salariée de l'équipe). Elle apparaîtra sur la pointeuse et signera son arrivée/départ. Tous les champs sont obligatoires.</p>
+      <div class="row">
+        <label class="field"><span>Prénom *</span><input type="text" id="exPrenom" placeholder="Ex. : Karim"></label>
+        <label class="field"><span>Nom *</span><input type="text" id="exNom" placeholder="Ex. : Benali"></label>
+      </div>
+      <label class="field"><span>Poste *</span><input type="text" id="exPoste" placeholder="Ex. : Serveur extra"></label>
+      <label class="field"><span>Commentaire *</span>
+        <textarea id="exComment" placeholder="Ex. : extra recommandé par l'agence, service du soir"></textarea></label>
+      <button class="btn btn-primary btn-block" onclick="App.ajouterExtra()">🧑‍🍳 Ajouter cet extra</button>
+      <p style="font-size:.78rem;color:var(--ink-dim);margin-top:12px">
+        L'extra pointe par signature (sans code PIN). Ses heures sont comptées telles quelles, sans calcul de retard/bonus.</p>
+      ${this.extraListHtml(date)}`;
+  },
+  extraListHtml(date) {
+    const x = DB.extras[date] || {};
+    const ids = Object.keys(x);
+    if (!ids.length) return "";
+    return `<div class="mt"><h3 style="font-size:1.1rem;margin:18px 0 10px">Extras d'aujourd'hui</h3>
+      <div class="table-card"><table><thead><tr><th>Nom</th><th>Poste</th><th>Commentaire</th><th>Ajouté par</th><th></th></tr></thead><tbody>
+      ${ids.map(id=>`<tr>
+        <td>${x[id].prenom} ${x[id].nom}</td><td>${x[id].poste}</td>
+        <td style="color:var(--ink-soft)">${x[id].commentaire}</td><td>${x[id].by}</td>
+        <td><button class="btn btn-red btn-sm" onclick="App.retirerExtra('${id}')">Retirer</button></td></tr>`).join("")}
+      </tbody></table></div></div>`;
+  },
+  ajouterExtra() {
+    const date = this.currentDate;
+    const prenom = document.getElementById("exPrenom").value.trim();
+    const nom = document.getElementById("exNom").value.trim();
+    const poste = document.getElementById("exPoste").value.trim();
+    const commentaire = document.getElementById("exComment").value.trim();
+    if (!prenom || !nom || !poste || !commentaire) {
+      toast("Tous les champs sont obligatoires pour un extra.", "err"); return;
+    }
+    const id = "x_" + Date.now();
+    if (!DB.extras[date]) DB.extras[date] = {};
+    DB.extras[date][id] = { prenom, nom, poste, commentaire, by: emp(this.session.empId).nom, at: Date.now() };
+    saveDB();
+    logAction(emp(this.session.empId).nom, "Ajout extra",
+      `${prenom} ${nom} (${poste}) — ${date}. Commentaire : ${commentaire}`);
+    toast(`Extra ${prenom} ${nom} ajouté.`, "ok");
+    this.renderAdminPanel();
+  },
+  retirerExtra(id) {
+    const date = this.currentDate;
+    const x = DB.extras[date] && DB.extras[date][id];
+    if (x) {
+      // retirer aussi ses pointages du jour
+      DB.pointages = DB.pointages.filter(p=>!(p.empId===id && p.date===date));
+      delete DB.extras[date][id];
+      saveDB();
+      logAction(emp(this.session.empId).nom, "Retrait extra", `${x.prenom} ${x.nom} — ${date}`);
+    }
+    this.renderAdminPanel();
+  },
+
+  /* ----- onglet CODES PIN ----- */
+  tabPins(c) {
+    const isDir = this.session.access==="dirigeant";
+    const moiId = this.session.empId;
+    // salariés + manager + dirigeant
+    const rows = DB.team.map(e=>{
+      // Qui peut modifier qui ?
+      // - Dirigeant : tout le monde
+      // - Manager : les salariés uniquement (pas lui-même, pas le dirigeant)
+      let canEdit = false, raison = "";
+      if (isDir) {
+        canEdit = true;
+      } else { // manager
+        if (e.id===moiId) { raison = "votre propre code"; }
+        else if (e.access==="dirigeant") { raison = "réservé au Dirigeant"; }
+        else { canEdit = true; }
+      }
+      // suppression : dirigeant -> tous sauf lui-même ; manager -> salariés uniquement (pas lui)
+      const canDelete = isDir ? (e.id!==moiId) : (e.access==="salarie" && e.id!==moiId);
+      const btnPin = canEdit
+        ? `<button class="btn btn-ghost btn-sm" onclick="App.changePin('${e.id}')">Changer le PIN</button>`
+        : `<span style="color:var(--ink-dim);font-size:.82rem">${raison}</span>`;
+      const btnVoir = isDir
+        ? `<button class="btn btn-ghost btn-sm" onclick="App.revealPin('${e.id}')">👁 Voir</button>` : "";
+      const btnDel = canDelete
+        ? `<button class="btn btn-ghost btn-sm" style="color:#e8556b" onclick="App.deleteEmp('${e.id}')">Supprimer</button>` : "";
+      return `<tr>
+        <td>${e.nom}<div style="color:var(--ink-soft);font-size:.78rem">${e.role}</div></td>
+        <td class="num" style="letter-spacing:.3em">••••</td>
+        <td><div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${btnPin}${btnVoir}${btnDel}</div></td>
+      </tr>`;
+    }).join("");
+    c.innerHTML = `
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap">
+        <p style="color:var(--ink-soft);font-size:.9rem;margin:0;flex:1;min-width:200px">
+          Gérez vos salariés et leur code PIN (4 chiffres) utilisé pour pointer.${isDir?'' : ' En tant que Manager, vous gérez les salariés, mais pas votre propre code ni celui du Dirigeant.'}</p>
+        <button class="btn btn-primary btn-sm" onclick="App.addEmp()">➕ Ajouter un salarié</button>
+      </div>
+      <div class="table-card"><table>
+        <thead><tr><th>Salarié</th><th>Code</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>`;
+  },
+  addEmp() {
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>➕ Nouveau salarié</h3>
+      <div class="modal-sub">Le code PIN peut rester vide : un code temporaire sera généré automatiquement.</div>
+      <label class="field"><span>Nom complet</span>
+        <input type="text" id="neNom" placeholder="Ex. : Léa Fontaine"></label>
+      <label class="field"><span>Rôle (facultatif)</span>
+        <input type="text" id="neRole" placeholder="Ex. : Serveuse"></label>
+      <label class="field"><span>Code PIN (4 chiffres, facultatif)</span>
+        <input type="text" id="nePin" inputmode="numeric" maxlength="4" placeholder="auto" style="letter-spacing:.3em;text-align:center"></label>
+      <div class="row mt">
+        <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="App.saveNewEmp()">Créer</button>
+      </div>`);
+  },
+  saveNewEmp() {
+    const nom = (document.getElementById("neNom").value||"").trim();
+    const role = (document.getElementById("neRole").value||"").trim() || "Salarié";
+    let pin = (document.getElementById("nePin").value||"").trim();
+    if (!estNomValide(nom)) { toast("Indiquez un nom valide.", "err"); return; }
+    if (DB.team.some(e=>e.nom.toLowerCase().trim()===nom.toLowerCase())) {
+      toast("Un salarié porte déjà ce nom.", "err"); return;
+    }
+    const used = new Set(DB.team.map(e=>e.pin));
+    if (pin) {
+      if (!/^\d{4}$/.test(pin)) { toast("Le code doit comporter exactement 4 chiffres.", "err"); return; }
+    } else {
+      pin = genererPin(used);
+    }
+    const id = "e_" + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+    DB.team.push({ id, nom, role, pin, access:"salarie" });
+    saveDB();
+    logAction(emp(this.session.empId).nom, "Ajout salarié", `${nom} créé (PIN ${pin})`);
+    closeModal();
+    toast(`${nom} ajouté — PIN ${pin}.`, "ok");
+    this.renderAdminPanel();
+  },
+  deleteEmp(empId) {
+    const e = emp(empId); if (!e) return;
+    const isDir = this.session.access==="dirigeant";
+    if (empId===this.session.empId) { toast("Vous ne pouvez pas vous supprimer vous-même.", "err"); return; }
+    if (!isDir && e.access!=="salarie") { toast("Seul le Dirigeant peut supprimer ce profil.", "err"); return; }
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>Supprimer ${e.nom} ?</h3>
+      <div class="modal-sub">Le salarié et ses horaires prévus seront retirés. Les pointages déjà enregistrés sont conservés dans l'historique. Cette action est définitive.</div>
+      <div class="row mt">
+        <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+        <button class="btn btn-primary" style="background:#e8556b" onclick="App.confirmDeleteEmp('${empId}')">Supprimer définitivement</button>
+      </div>`);
+  },
+  confirmDeleteEmp(empId) {
+    const e = emp(empId); if (!e) { closeModal(); return; }
+    const isDir = this.session.access==="dirigeant";
+    if (empId===this.session.empId) { toast("Action impossible.", "err"); return; }
+    if (!isDir && e.access!=="salarie") { toast("Action réservée au Dirigeant.", "err"); return; }
+    const nom = e.nom;
+    DB.team = DB.team.filter(t=>t.id!==empId);
+    // retirer ses horaires prévus (planning + renforts), garder les pointages historiques
+    Object.keys(DB.planning||{}).forEach(d=>{ if (DB.planning[d]) delete DB.planning[d][empId]; });
+    Object.keys(DB.renforts||{}).forEach(d=>{ if (DB.renforts[d]) delete DB.renforts[d][empId]; });
+    saveDB();
+    logAction(emp(this.session.empId).nom, "Suppression salarié", `${nom} supprimé de l'équipe`);
+    closeModal();
+    toast(`${nom} supprimé.`, "ok");
+    this.renderAdminPanel();
+  },
+  revealPin(empId) {
+    if (this.session.access!=="dirigeant") { toast("Réservé au Dirigeant.", "err"); return; }
+    const e = emp(empId); if (!e) return;
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>Code PIN — ${e.nom}</h3>
+      <div class="modal-sub">Code actuel utilisé pour pointer :</div>
+      <div style="text-align:center;font-size:2.2rem;font-weight:700;letter-spacing:.4em;margin:10px 0 4px">${e.pin}</div>
+      <p style="font-size:.78rem;color:var(--ink-dim);text-align:center">Ne le communiquez qu'à la personne concernée.</p>
+      <button class="btn btn-primary btn-block mt" onclick="closeModal()">Fermer</button>`);
+  },
+  changePin(empId) {
+    const e = emp(empId);
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>Code PIN — ${e.nom}</h3>
+      <div class="modal-sub">Saisissez un nouveau code à 4 chiffres.</div>
+      <label class="field"><span>Nouveau code (4 chiffres)</span>
+        <input type="text" id="np1" inputmode="numeric" maxlength="4" placeholder="••••" style="letter-spacing:.3em;font-size:1.3rem;text-align:center"></label>
+      <label class="field"><span>Confirmer le code</span>
+        <input type="text" id="np2" inputmode="numeric" maxlength="4" placeholder="••••" style="letter-spacing:.3em;font-size:1.3rem;text-align:center"></label>
+      <div class="row mt">
+        <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="App.saveNewPin('${empId}')">Enregistrer</button>
+      </div>`);
+  },
+  saveNewPin(empId) {
+    const e = emp(empId);
+    const p1 = (document.getElementById("np1").value||"").trim();
+    const p2 = (document.getElementById("np2").value||"").trim();
+    // re-vérifier les droits (sécurité)
+    const isDir = this.session.access==="dirigeant";
+    if (!isDir) {
+      if (empId===this.session.empId) { toast("Vous ne pouvez pas changer votre propre code.", "err"); return; }
+      if (e.access==="dirigeant") { toast("Seul le Dirigeant peut changer ce code.", "err"); return; }
+    }
+    if (!/^\d{4}$/.test(p1)) { toast("Le code doit comporter exactement 4 chiffres.", "err"); return; }
+    if (p1!==p2) { toast("Les deux codes ne correspondent pas.", "err"); return; }
+    const target = DB.team.find(t=>t.id===empId);
+    target.pin = p1;
+    saveDB();
+    logAction(emp(this.session.empId).nom, "Changement code PIN", `Code de ${e.nom} modifié`);
+    closeModal();
+    toast(`Code PIN de ${e.nom} mis à jour.`, "ok");
+    this.renderAdminPanel();
+  },
+
+  /* ----- onglet JOURNAL ----- */
+  tabJournal(c) {
+    const j = DB.journal.slice(0,200);
+    c.innerHTML = j.length ? `<div class="table-card"><table>
+      <thead><tr><th>Date / heure</th><th>Qui</th><th>Action</th><th>Détail</th></tr></thead>
+      <tbody>${j.map(x=>`<tr>
+        <td class="num">${new Date(x.ts).toLocaleString("fr-FR")}</td>
+        <td>${x.who}</td><td>${x.action}</td><td style="color:var(--ink-soft)">${x.detail||''}</td>
+      </tr>`).join("")}</tbody></table></div>`
+      : `<div class="empty"><div class="ico">📝</div>Aucune action enregistrée pour le moment.</div>`;
+  },
+
+  /* ----- onglet EXPORT ----- */
+  tabExport(c) {
+    // initialiser la plage à "ce mois-ci" UNIQUEMENT à la première ouverture
+    if (!this._expInit) {
+      const auj = this.currentDate;
+      this.expFrom = auj.slice(0,7) + "-01";
+      this.expTo = auj;
+      this._expInit = true;
+    }
+    c.innerHTML = `
+      <p style="color:var(--ink-soft);font-size:.9rem;margin-bottom:18px">
+        Exportez les données de badgeage au format CSV (ouvrable dans LibreOffice / Excel).</p>
+      <div class="stat-grid">
+        <div class="stat"><div class="v">${DB.pointages.length}</div><div class="l">Pointages</div></div>
+        <div class="stat"><div class="v">${Object.keys(DB.planning).length}</div><div class="l">Jours planifiés</div></div>
+        <div class="stat"><div class="v">${DB.journal.length}</div><div class="l">Entrées journal</div></div>
+      </div>
+
+      <div class="table-card" style="padding:16px 18px;margin-bottom:14px">
+        <h3 style="font-size:1rem;margin:0 0 10px">📆 Plage à exporter</h3>
+        <p style="color:var(--ink-soft);font-size:.84rem;margin:0 0 12px">Choisissez la période. Pré-remplie sur le mois en cours pour la paie.</p>
+        <div class="row" style="align-items:flex-end;gap:14px;flex-wrap:wrap">
+          <label class="field" style="max-width:200px;margin-bottom:0"><span>Du</span>
+            <input type="date" id="expFromInput" value="${this.expFrom}" onchange="App.expFrom=this.value"></label>
+          <label class="field" style="max-width:200px;margin-bottom:0"><span>Au</span>
+            <input type="date" id="expToInput" value="${this.expTo}" onchange="App.expTo=this.value"></label>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <button class="btn btn-ghost btn-sm" onclick="App.setExpPeriode('mois')">Mois en cours</button>
+            <button class="btn btn-ghost btn-sm" onclick="App.setExpPeriode('mois-prec')">Mois précédent</button>
+            <button class="btn btn-ghost btn-sm" onclick="App.setExpPeriode('tout')">Tout</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <button class="btn btn-primary" onclick="App.exportPointages()">💾 Exporter les pointages (CSV)</button>
+        <button class="btn btn-ghost" onclick="App.exportJournal()">📝 Exporter le journal (CSV)</button>
+      </div>
+
+      <div class="mt" style="margin-top:26px;padding-top:20px;border-top:1px solid var(--line)">
+        <h3 style="font-size:1.05rem;margin-bottom:6px">🛟 Sauvegarde complète</h3>
+        <p style="color:var(--ink-soft);font-size:.86rem;margin-bottom:14px">
+          Crée un fichier de secours contenant <b>toutes</b> les données (pointages, signatures, planning, journal, paramètres). À ranger en lieu sûr. Permet de tout restaurer sur une nouvelle tablette ou après un nettoyage du navigateur.</p>
+        <div class="row">
+          <button class="btn btn-green" onclick="App.sauvegardeComplete()">⬇️ Télécharger une sauvegarde complète</button>
+          <button class="btn btn-ghost" onclick="document.getElementById('restoreFile').click()">⬆️ Restaurer depuis une sauvegarde</button>
+        </div>
+        <input type="file" id="restoreFile" accept=".json" style="display:none" onchange="App.restaurerSauvegarde(this.files[0])">
+      </div>
+
+      ${this.session.access==="dirigeant"?`
+      <div class="mt" style="margin-top:26px;padding-top:20px;border-top:1px solid var(--line)">
+        <h3 style="font-size:1.05rem;margin-bottom:10px">Zone dirigeant</h3>
+        <button class="btn btn-red btn-sm" onclick="App.resetData()">🗑️ Réinitialiser toutes les données</button>
+      </div>`:''}`;
+  },
+  /* Raccourcis de plage */
+  expFrom: null,
+  expTo: null,
+  setExpPeriode(p) {
+    const auj = this.currentDate;
+    if (p === "tout") { this.expFrom = ""; this.expTo = ""; }
+    else if (p === "mois") {
+      this.expFrom = auj.slice(0,7) + "-01";
+      this.expTo = auj;
+    } else if (p === "mois-prec") {
+      const [y,mo] = auj.split("-").map(Number);
+      const dPrec = new Date(y, mo-2, 1); // mois précédent
+      const yPrec = dPrec.getFullYear(), moPrec = String(dPrec.getMonth()+1).padStart(2,'0');
+      const dernierJ = new Date(y, mo-1, 0).getDate(); // dernier jour du mois précédent
+      this.expFrom = `${yPrec}-${moPrec}-01`;
+      this.expTo = `${yPrec}-${moPrec}-${String(dernierJ).padStart(2,'0')}`;
+    }
+    this.renderAdminPanel();
+  },
+  /* Vérifie si une date ISO est dans la plage saisie. Plage vide = pas de filtre. */
+  _dansPlage(dateISO) {
+    if (!this.expFrom && !this.expTo) return true;
+    if (this.expFrom && dateISO < this.expFrom) return false;
+    if (this.expTo && dateISO > this.expTo) return false;
+    return true;
+  },
+  /* Sauvegarde complète (toutes les données, signatures incluses) */
+  sauvegardeComplete() {
+    const data = JSON.stringify(DB, null, 0);
+    const stamp = todayISO();
+    downloadFile(data, `sauvegarde_badgeuse_${stamp}.json`, "application/json");
+    DB.lastBackupMonth = stamp.slice(0,7); // marque le mois comme sauvegardé -> lève le rappel
+    saveDB();
+    logAction(this.session?emp(this.session.empId).nom:"?", "Sauvegarde complète", `Fichier du ${stamp}`);
+    toast("Sauvegarde complète téléchargée. Rappel du mois levé.", "ok");
+    if (this.session) this.renderAdminPanel();
+  },
+  /* Restauration depuis un fichier de sauvegarde */
+  async restaurerSauvegarde(file) {
+    if (!file) return;
+    // Étape 1 : valider le fichier AVANT de toucher quoi que ce soit
+    try {
+      const txt = await file.text();
+      const obj = JSON.parse(txt);
+      if (!obj || !obj.team || !obj.pointages) { toast("Fichier de sauvegarde invalide.", "err"); return; }
+      // On garde le contenu validé en attente, et on affiche la fenêtre de prudence
+      this._restaurePending = { obj, name: file.name };
+      // Mini résumé du contenu de la sauvegarde
+      const nbP = obj.pointages.length;
+      const nbJ = Object.keys(obj.planning||{}).length;
+      const datePtg = obj.pointages.length ? (obj.pointages.reduce((d,p)=>p.date>d?p.date:d, "0000")) : "—";
+      // Données actuelles
+      const aNbP = DB.pointages.length;
+      const aNbJ = Object.keys(DB.planning||{}).length;
+      openModal(`
+        <button class="modal-close" onclick="App._cancelRestauration()">×</button>
+        <h3>🛟 Restauration — sauvegarde de sécurité</h3>
+        <div class="modal-sub" style="margin-bottom:14px">
+          Vous allez restaurer <b>${file.name}</b>. Toutes les données actuelles seront <b>remplacées</b>.
+        </div>
+        <div style="background:rgba(155,167,196,.08);border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:.85rem;margin-bottom:16px;line-height:1.6">
+          <div><b>📂 Sauvegarde à restaurer :</b><br>
+            ${nbP} pointage(s), ${nbJ} jour(s) planifié(s), dernier pointage : ${datePtg}</div>
+          <div style="margin-top:8px"><b>💾 État actuel de cette tablette :</b><br>
+            ${aNbP} pointage(s), ${aNbJ} jour(s) planifié(s)</div>
+        </div>
+        <p style="font-size:.88rem;color:var(--ink-soft);margin-bottom:16px;line-height:1.55">
+          Par sécurité, téléchargez d'abord une <b>sauvegarde de l'état actuel</b> avant de continuer. Comme ça, en cas de problème ou si vous voulez revenir à l'état d'avant, vous aurez le fichier sous la main.</p>
+        <button class="btn btn-green btn-block" onclick="App._telechargerAvantRestauration()">⬇️ 1. Télécharger une sauvegarde de l'état actuel</button>
+        <div style="text-align:center;color:var(--ink-dim);font-size:.8rem;margin:14px 0">— puis —</div>
+        <button class="btn btn-primary btn-block" onclick="App._doRestauration()" id="btnDoRestaure" disabled style="opacity:.5">▶️ 2. Continuer la restauration</button>
+        <div style="text-align:center;margin-top:14px">
+          <span class="pill-link" onclick="App._forceRestauration()" style="color:var(--ink-dim);font-size:.78rem">Passer cette étape (déconseillé)</span>
+        </div>
+        <div style="text-align:center;margin-top:8px">
+          <span class="pill-link" onclick="App._cancelRestauration()" style="font-size:.85rem">Annuler la restauration</span>
+        </div>`);
+    } catch(e) {
+      console.error(e); toast("Impossible de lire ce fichier de sauvegarde.", "err");
+    }
+  },
+  _telechargerAvantRestauration() {
+    // Sauvegarde de sécurité de l'état actuel
+    const data = JSON.stringify(DB, null, 0);
+    const stamp = todayISO();
+    downloadFile(data, `sauvegarde_AVANT-restauration_${stamp}.json`, "application/json");
+    logAction(this.session?emp(this.session.empId).nom:"?", "Sauvegarde de sécurité (avant restauration)", `Fichier du ${stamp}`);
+    toast("Sauvegarde de sécurité téléchargée. Vous pouvez maintenant continuer.", "ok");
+    // débloquer le bouton de continuation
+    const b = document.getElementById("btnDoRestaure");
+    if (b) { b.disabled = false; b.style.opacity = "1"; }
+  },
+  _doRestauration() {
+    const pending = this._restaurePending;
+    if (!pending) return;
+    const obj = pending.obj;
+    DB = obj;
+    // garde-fous sur les structures, comme loadDB
+    DB.team=DB.team||[]; DB.planning=DB.planning||{}; DB.renforts=DB.renforts||{};
+    DB.extras=DB.extras||{}; DB.pointages=DB.pointages||[]; DB.journal=DB.journal||[];
+    DB.security=DB.security||{failCount:0,locked:false,lockedAt:null};
+    DB.settings=DB.settings||{emailjs:{serviceId:"",templateId:"",publicKey:""},alertEmail:"",maxTries:3};
+    DB.aVerifier=DB.aVerifier||{};
+    saveDB();
+    logAction("Système", "Restauration sauvegarde", `Fichier : ${pending.name}`);
+    this._restaurePending = null;
+    closeModal();
+    toast("Sauvegarde restaurée avec succès.", "ok");
+    this.session=null; this.showBadge();
+  },
+  _forceRestauration() {
+    // chemin "passer cette étape" : confirmation explicite supplémentaire
+    if (!confirm("Continuer SANS télécharger de sauvegarde de sécurité ? L'état actuel sera définitivement remplacé.")) return;
+    this._doRestauration();
+  },
+  _cancelRestauration() {
+    this._restaurePending = null;
+    closeModal();
+    toast("Restauration annulée.", "ok");
+  },
+  exportPointages() {
+    let csv = "Date;Salarié;Rôle;Service n°;Prévu début;Prévu fin;Arrivée réelle;Départ réel;Pause repas (min);Temps travaillé jour;Ponctualité jour (min);Modifié par\n";
+    const dates = [...new Set(DB.pointages.map(p=>p.date))].sort().filter(d=>this._dansPlage(d));
+    let nbLignes = 0;
+    dates.forEach(d=>{
+      prevusDuJour(d).concat([...new Set(DB.pointages.filter(p=>p.date===d).map(p=>p.empId))])
+        .filter((v,i,a)=>a.indexOf(v)===i).forEach(id=>{
+        const e = emp(id); if(!e) return;
+        const paires = pairesJour(id, d);
+        if(!paires.length) return;
+        const prevu = getPrevu(id, d);
+        const solde = calcSoldeJour(prevu, paires);
+        const tt = tempsTravailleMin(paires, id, d);
+        const ttLabel = tt>0 ? `${Math.floor(tt/60)}h${String(tt%60).padStart(2,'0')}` : '';
+        const pauseMin = tempsPauseMin(id, d);
+        paires.forEach((p,i)=>{
+          const cr = prevu && prevu.creneaux ? prevu.creneaux[i] : null;
+          const modif = (p.inP?.editedBy || p.outP?.editedBy || '');
+          csv += `${d};${e.nom};${e.role};${i+1};${cr?cr.debut:''};${cr?cr.fin:''};${p.in||''};${p.out||''};${i===0&&pauseMin>0?pauseMin:''};${i===0?ttLabel:''};${i===0&&solde!==null?solde:''};${modif}\n`;
+          nbLignes++;
+        });
+      });
+    });
+    const suffixe = (this.expFrom||this.expTo) ? `_${this.expFrom||"debut"}_au_${this.expTo||"fin"}` : "_tout";
+    downloadFile(csv, `pointages${suffixe}_${todayISO()}.csv`, "text/csv");
+    toast(nbLignes ? `Export généré : ${nbLignes} ligne(s).` : "Export généré (aucune donnée dans la plage choisie).", "ok");
+  },
+  exportJournal() {
+    let csv = "Date/heure;Qui;Action;Détail\n";
+    let nbLignes = 0;
+    DB.journal.forEach(x=>{
+      // date ISO de l'événement (AAAA-MM-JJ)
+      const dateISO = new Date(x.ts).toISOString().slice(0,10);
+      if (!this._dansPlage(dateISO)) return;
+      csv += `${new Date(x.ts).toLocaleString("fr-FR")};${x.who};${x.action};"${(x.detail||'').replace(/"/g,'""')}"\n`;
+      nbLignes++;
+    });
+    const suffixe = (this.expFrom||this.expTo) ? `_${this.expFrom||"debut"}_au_${this.expTo||"fin"}` : "_tout";
+    downloadFile(csv, `journal${suffixe}_${todayISO()}.csv`, "text/csv");
+    toast(nbLignes ? `Export journal généré : ${nbLignes} entrée(s).` : "Export généré (aucune entrée dans la plage choisie).", "ok");
+  },
+  resetData() {
+    if (!confirm("Réinitialiser TOUTES les données (pointages, planning, journal) ? Action irréversible.")) return;
+    localStorage.removeItem(STORE_KEY); DB=null; loadDB();
+    toast("Données réinitialisées.", "ok"); this.showBadge();
+  },
+
+  /* ----- onglet PARAMÈTRES (Dirigeant) : alerte mail + sécurité ----- */
+  tabParams(c) {
+    const s = DB.settings;
+    const j = s.emailjs || {};
+    c.innerHTML = `
+      <h3 style="font-size:1.15rem;margin-bottom:6px">Sécurité d'accès</h3>
+      <p style="color:var(--ink-soft);font-size:.88rem;margin-bottom:14px">
+        Après plusieurs codes incorrects à l'entrée de l'espace gestion, le système se verrouille. Il se débloque automatiquement le lendemain à 8h00, ou immédiatement avec le code Direction.</p>
+      <label class="field" style="max-width:260px"><span>Nombre de tentatives avant blocage</span>
+        <input type="number" id="stTries" min="1" max="10" value="${s.maxTries}"></label>
+
+      <h3 style="font-size:1.15rem;margin:22px 0 6px">Alerte e-mail (en cas de verrouillage)</h3>
+      <p style="color:var(--ink-soft);font-size:.88rem;margin-bottom:14px">
+        L'app peut envoyer un e-mail automatique à la Direction lors d'un verrouillage, via le service gratuit <b>EmailJS</b> (nécessite internet). Sans configuration ou sans internet, l'alerte est simplement inscrite au journal.</p>
+      <label class="field"><span>Adresse e-mail à prévenir</span>
+        <input type="email" id="stEmail" value="${s.alertEmail||''}" placeholder="direction@monrestaurant.fr"></label>
+      <div class="row">
+        <label class="field"><span>EmailJS — Service ID</span>
+          <input type="text" id="stSid" value="${j.serviceId||''}" placeholder="service_xxxxxxx"></label>
+        <label class="field"><span>EmailJS — Template ID</span>
+          <input type="text" id="stTid" value="${j.templateId||''}" placeholder="template_xxxxxxx"></label>
+      </div>
+      <label class="field"><span>EmailJS — Clé publique (Public Key)</span>
+        <input type="text" id="stKey" value="${j.publicKey||''}" placeholder="xxxxxxxxxxxxxxxx"></label>
+
+      <div class="row mt">
+        <button class="btn btn-primary" onclick="App.saveParams()">💾 Enregistrer</button>
+        <button class="btn btn-ghost" onclick="App.testMail()">✉️ Tester l'envoi</button>
+      </div>
+      <p style="font-size:.78rem;color:var(--ink-dim);margin-top:14px">
+        Astuce : créez un compte gratuit sur emailjs.com, ajoutez un service e-mail et un modèle, puis copiez ici les 3 identifiants. Le modèle doit contenir les variables <code>{{to_email}}</code>, <code>{{subject}}</code> et <code>{{message}}</code>.</p>`;
+  },
+  saveParams() {
+    const tries = parseInt(document.getElementById("stTries").value,10);
+    DB.settings.maxTries = (tries>=1 && tries<=10) ? tries : 3;
+    DB.settings.alertEmail = document.getElementById("stEmail").value.trim();
+    DB.settings.emailjs = {
+      serviceId: document.getElementById("stSid").value.trim(),
+      templateId: document.getElementById("stTid").value.trim(),
+      publicKey: document.getElementById("stKey").value.trim()
+    };
+    saveDB();
+    logAction(emp(this.session.empId).nom, "Modification paramètres", "Sécurité / alerte e-mail");
+    toast("Paramètres enregistrés.", "ok");
+  },
+  testMail() {
+    const s = DB.settings; const cfg = s.emailjs||{};
+    const online = navigator.onLine;
+    if (!s.alertEmail) { toast("Renseignez d'abord l'adresse e-mail.", "err"); return; }
+    if (!(window.emailjs && cfg.serviceId && cfg.templateId && cfg.publicKey)) {
+      toast("Configuration EmailJS incomplète.", "err"); return;
+    }
+    if (!online) { toast("Pas de connexion internet pour tester.", "err"); return; }
+    try {
+      window.emailjs.init({ publicKey: cfg.publicKey });
+      window.emailjs.send(cfg.serviceId, cfg.templateId, {
+        to_email: s.alertEmail,
+        subject: "✅ Badgeuse — test de notification",
+        message: "Ceci est un e-mail de test. La notification d'alerte est correctement configurée.",
+        when: new Date().toLocaleString("fr-FR"), tries: s.maxTries
+      }).then(()=>toast("E-mail de test envoyé à "+s.alertEmail, "ok"))
+        .catch(err=>toast("Échec de l'envoi : "+(err&&err.text||"erreur"), "err"));
+    } catch(e) { toast("Erreur : "+e.message, "err"); }
+  },
+
+  /* ---------- IMPORT DU PLANNING ---------- */
+  openImport() {
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>Importer le planning</h3>
+      <div class="modal-sub">Chargez le fichier <b>planning_restaurant_2026</b> (.xlsx). L'app lira les horaires prévus de chaque salarié.</div>
+      <label class="field"><span>Fichier planning (.xlsx)</span>
+        <input type="file" id="planFile" accept=".xlsx"></label>
+      <div id="importInfo" style="font-size:.85rem;color:var(--ink-soft);margin-bottom:14px"></div>
+      <button class="btn btn-primary btn-block" onclick="App.doImport()">📥 Lire et importer</button>
+      <p style="font-size:.78rem;color:var(--ink-dim);margin-top:14px">
+        Astuce : si le manager importe un planning modifié, les changements d'horaires détectés exigeront un commentaire.</p>`);
+  },
+  async doImport() {
+    const f = document.getElementById("planFile").files[0];
+    if (!f) { toast("Choisissez un fichier.", "err"); return; }
+    try {
+      const data = await f.arrayBuffer();
+      let { planning: planningExcel, inconnues, noms } = await parseXlsxPlanning(data);
+      // CRÉATION AUTO : tout salarié du fichier absent de l'app est créé avec un PIN temporaire
+      const nouveaux = ajouterSalariesDepuisFichier(noms);
+      this._nouveauxSalaries = nouveaux;
+      if (nouveaux.length) {
+        // re-lire le fichier : les nouveaux salariés existent désormais, leur planning peut se rattacher
+        ({ planning: planningExcel, inconnues } = await parseXlsxPlanning(data));
+      }
+      // Stocker les inconnues pour les afficher dans l'onglet Planning
+      DB._dernieresInconnues = inconnues || {};
+      // FUSION : protéger les jours déjà pointés/clôturés, appliquer l'Excel au reste
+      const { fusion, gel, conflits, appliques } = fusionnerPlanning(planningExcel);
+      // détection de changements (seulement sur la partie réellement modifiée = jours non figés)
+      const changes = detectPlanningChanges(DB.planning, fusion);
+      // Compteur d'inconnues pour les messages
+      const nbInco = Object.keys(inconnues||{}).length;
+      const totInco = Object.values(inconnues||{}).reduce((a,b)=>a+b,0);
+      if (changes.length && this.session && this.session.access!=="dirigeant") {
+        // manager : commentaire obligatoire par changement
+        this.pendingPlanning = fusion; this.pendingChanges = changes;
+        this._importMeta = { name:f.name, gel, conflits, nbInco, totInco };
+        this.askChangeComments(0, {});
+        return;
+      }
+      DB.planning = fusion; DB.lastPlanningName = f.name; saveDB();
+      const flags = rattraperImport(this.currentDate);
+      // Journaliser les salariés créés automatiquement (avec PIN temporaire)
+      if (this._nouveauxSalaries && this._nouveauxSalaries.length) {
+        const who = this.session ? emp(this.session.empId).nom : "(import direct)";
+        const liste = this._nouveauxSalaries.map(s=>`${s.nom} (PIN ${s.pin})`).join(", ");
+        logAction(who, "Salariés créés à l'import",
+          `${this._nouveauxSalaries.length} salarié(s) ajouté(s) avec PIN temporaire : ${liste}`);
+      }
+      // Journaliser les inconnues si présentes
+      if (nbInco) {
+        const liste = Object.entries(inconnues).map(([k,n])=>`"${k}" (×${n})`).join(", ");
+        logAction(this.session?emp(this.session.empId).nom:"(import direct)", "Cases planning non reconnues",
+          `${totInco} case(s) ignorée(s) à l'import (${nbInco} valeur(s) distincte(s)) : ${liste}`);
+      }
+      logAction(this.session?emp(this.session.empId).nom:"(import direct)", "Import planning",
+        `${f.name} — ${appliques} jour(s) appliqué(s)${gel?`, jours ≤ ${gel} protégés`:''}${conflits?`, ${conflits} conflit(s) ignoré(s)`:''}${flags?` · ${flags} absence(s) à vérifier`:''}${nbInco?` · ${totInco} case(s) non reconnue(s)`:''}`);
+      closeModal();
+      let msg = "Planning importé.";
+      const nbNew = (this._nouveauxSalaries||[]).length;
+      if (nbNew) msg += ` ${nbNew} salarié(s) créé(s).`;
+      if (gel) msg += ` Jours jusqu'au ${gel} protégés (déjà pointés).`;
+      if (conflits) msg += ` ${conflits} conflit(s) ignoré(s) et journalisé(s).`;
+      if (flags) msg += ` ${flags} absence(s) à vérifier.`;
+      if (nbInco) msg += ` ⚠️ ${totInco} case(s) non reconnue(s) — voir l'onglet Planning.`;
+      toast(msg, "ok");
+      if (this.session) { this.adminTab = "planning"; this.renderAdminPanel(); }
+      else this.showBadge();
+      this.montrerNouveauxSalaries(); // affiche la liste des PIN temporaires si besoin
+    } catch(e) {
+      console.error(e); toast("Impossible de lire ce fichier : "+e.message, "err");
+    }
+  },
+  askChangeComments(idx, acc) {
+    if (idx>=this.pendingChanges.length) {
+      // tout commenté : appliquer
+      DB.planning = this.pendingPlanning;
+      if (this._importMeta) DB.lastPlanningName = this._importMeta.name;
+      saveDB();
+      const who = emp(this.session.empId).nom;
+      this.pendingChanges.forEach(ch=>{
+        logAction(who, "Changement planning",
+          `${ch.empNom} — ${ch.date} : ${ch.oldLabel} → ${ch.newLabel}. Motif : ${acc[ch.key]}`);
+      });
+      const flags = rattraperImport(this.currentDate);
+      const meta = this._importMeta || {};
+      if (this._nouveauxSalaries && this._nouveauxSalaries.length) {
+        const liste = this._nouveauxSalaries.map(s=>`${s.nom} (PIN ${s.pin})`).join(", ");
+        logAction(who, "Salariés créés à l'import",
+          `${this._nouveauxSalaries.length} salarié(s) ajouté(s) avec PIN temporaire : ${liste}`);
+      }
+      if (meta.nbInco) {
+        const inco = DB._dernieresInconnues || {};
+        const liste = Object.entries(inco).map(([k,n])=>`"${k}" (×${n})`).join(", ");
+        logAction(who, "Cases planning non reconnues",
+          `${meta.totInco} case(s) ignorée(s) (${meta.nbInco} valeur(s) distincte(s)) : ${liste}`);
+      }
+      closeModal();
+      let msg = `${this.pendingChanges.length} changement(s) appliqué(s) et justifié(s).`;
+      const nbNew = (this._nouveauxSalaries||[]).length;
+      if (nbNew) msg += ` ${nbNew} salarié(s) créé(s).`;
+      if (meta.gel) msg += ` Jours jusqu'au ${meta.gel} protégés.`;
+      if (meta.conflits) msg += ` ${meta.conflits} conflit(s) ignoré(s).`;
+      if (flags) msg += ` ${flags} absence(s) à vérifier.`;
+      if (meta.nbInco) msg += ` ⚠️ ${meta.totInco} case(s) non reconnue(s) — voir l'onglet Planning.`;
+      toast(msg, "ok");
+      if (this.session) { this.adminTab = "planning"; this.renderAdminPanel(); }
+      else this.showBadge();
+      this.montrerNouveauxSalaries();
+      return;
+    }
+    const ch = this.pendingChanges[idx];
+    openModal(`
+      <h3>Changement ${idx+1}/${this.pendingChanges.length}</h3>
+      <div class="modal-sub">Justifiez ce changement de planning (commentaire obligatoire).</div>
+      <div class="table-card mb" style="padding:14px">
+        <b>${ch.empNom}</b> — ${frDate(ch.date)}<br>
+        <span style="color:var(--ink-soft)">${ch.oldLabel} → <b style="color:var(--accent)">${ch.newLabel}</b></span>
+      </div>
+      <label class="field"><span>Motif précis</span>
+        <textarea id="chC" placeholder="Ex. : échange de service validé avec Emma le 12/10"></textarea></label>
+      <button class="btn btn-primary btn-block" onclick="App.nextChange(${idx})">Valider et continuer</button>`);
+  },
+  nextChange(idx) {
+    const v = document.getElementById("chC").value.trim();
+    if (!v) { toast("Commentaire obligatoire.", "err"); return; }
+    const ch = this.pendingChanges[idx];
+    this._acc = this._acc || {};
+    this._acc[ch.key] = v;
+    this.askChangeComments(idx+1, this._acc);
+  },
+  /* Affiche la liste des salariés créés à l'import avec leur PIN temporaire.
+     Les codes étant masqués partout ailleurs, c'est le seul endroit où on les voit. */
+  montrerNouveauxSalaries() {
+    const nv = this._nouveauxSalaries || [];
+    this._nouveauxSalaries = null; // ne pas réafficher
+    if (!nv.length) return;
+    const lignes = nv.map(s=>`<tr>
+        <td>${s.nom}</td>
+        <td class="num" style="letter-spacing:.25em;font-weight:600">${s.pin}</td>
+      </tr>`).join("");
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>👥 ${nv.length} salarié(s) créé(s)</h3>
+      <div class="modal-sub">Ces salariés étaient dans le fichier mais pas encore dans l'app. Ils ont reçu un <b>code PIN temporaire</b>. Communiquez-le à chacun pour pointer, puis modifiez-le quand vous voulez dans l'onglet <b>🔑 Salariés &amp; PIN</b>.</div>
+      <div class="table-card" style="margin-top:6px"><table>
+        <thead><tr><th>Salarié</th><th>PIN temporaire</th></tr></thead>
+        <tbody>${lignes}</tbody>
+      </table></div>
+      <p style="font-size:.78rem;color:var(--ink-dim);margin-top:12px">Cette liste est aussi enregistrée dans le <b>Journal</b>. Pensez à changer ces codes rapidement pour la sécurité.</p>
+      <button class="btn btn-primary btn-block mt" onclick="closeModal()">J'ai noté les codes</button>`);
+  }
+};
+
+/* ====================================================================
+   IMPORT XLSX (lecture minimaliste, sans librairie externe)
+   Le .xlsx est un zip ; on lit les feuilles mensuelles et la Fiche.
+   ==================================================================== */
+async function parseXlsxPlanning(arrayBuffer) {
+  const zip = await unzipXlsx(arrayBuffer);
+  // 1. sharedStrings
+  const sst = parseSharedStrings(zip["xl/sharedStrings.xml"]);
+  // 2. workbook -> noms de feuilles + rId
+  const { sheets } = parseWorkbook(zip["xl/workbook.xml"]);
+  const rels = parseRels(zip["xl/_rels/workbook.xml.rels"]);
+
+  // Trouver la Fiche Personnel pour la liste des salariés et leurs lignes mensuelles
+  const MOIS = {Janvier:1,"Février":2,Fevrier:2,Mars:3,Avril:4,Mai:5,Juin:6,Juillet:7,"Août":8,Aout:8,Septembre:9,Octobre:10,Novembre:11,"Décembre":12,Decembre:12};
+  // header_row par mois (comme dans le planning)
+  const HEADER = {1:11,2:11,3:11,4:12,5:11,6:11,7:11,8:12,9:11,10:11,11:11,12:11};
+
+  // Construire l'ordre des salariés depuis la Fiche Personnel (lignes 4..)
+  let fiche = null;
+  sheets.forEach(s=>{ if (s.name==="Fiche Personnel") fiche = s; });
+  const planning = {};
+  const inconnues = {}; // valeurs non reconnues dans les cases horaires (pour signaler à l'import)
+  const nomsVus = new Set(); // tous les noms de salariés rencontrés dans le fichier
+
+  // map nom -> empId de notre équipe
+  function matchEmp(nom) {
+    const e = DB.team.find(t=>t.nom.toLowerCase()===String(nom).toLowerCase().trim());
+    return e?e.id:null;
+  }
+
+  for (const s of sheets) {
+    const moisNum = MOIS[s.name];
+    if (!moisNum) continue; // pas une feuille mensuelle
+    const path = "xl/" + rels[s.rId].replace(/^\/?xl\//,"").replace(/^\//,"");
+    const xml = zip[path] || zip["xl/"+rels[s.rId]] || zip[rels[s.rId]];
+    if (!xml) continue;
+    const cells = parseSheet(xml, sst); // { "B12": "valeur", ... }
+    const headerRow = HEADER[moisNum];
+    // jours : colonnes B..AF, ligne headerRow contient les numéros de jour
+    // chaque salarié est sur la ligne headerRow + 1 + index
+    // On lit jusqu'à 12 salariés
+    for (let i=0;i<14;i++){
+      const row = headerRow + 1 + i;
+      const nom = cells[`A${row}`];
+      if (!nom) continue;
+      if (estNomValide(nom)) nomsVus.add(String(nom).trim()); // mémoriser pour création auto
+      const empId = matchEmp(nom);
+      if (!empId) continue;
+      // parcourir les colonnes B..AF (2..32)
+      for (let col=2; col<=32; col++){
+        const colLetter = colName(col);
+        const code = cells[`${colLetter}${row}`];
+        if (!code) continue;
+        // 1) Essai en correspondance stricte (code prédéfini)
+        let entry = CODE_HORAIRES[code] ? { creneaux: CODE_HORAIRES[code].creneaux.map(cr=>({debut:cr.debut, fin:cr.fin})) } : null;
+        // 2) Sinon, parser souple
+        if (!entry) entry = parseHoraire(code);
+        // 3) Toujours rien : ignorer (et tracer seulement si ce n'est pas un code "non-horaire" connu)
+        if (!entry) {
+          const norm = String(code).trim().toUpperCase();
+          if (!NON_HORAIRE.has(norm) && !NON_HORAIRE.has(norm.replace(/^H\s*/, ""))) {
+            inconnues[code] = (inconnues[code]||0) + 1;
+          }
+          continue;
+        }
+        const jour = readDayNumber(cells, headerRow, colLetter, col);
+        if (!jour) continue;
+        const dateISO = `2026-${String(moisNum).padStart(2,"0")}-${String(jour).padStart(2,"0")}`;
+        if (!planning[dateISO]) planning[dateISO] = {};
+        planning[dateISO][empId] = { creneaux: entry.creneaux, code };
+      }
+    }
+  }
+  return { planning, inconnues, noms: [...nomsVus] };
+}
+
+/* numéro de jour depuis la ligne d'en-tête (ex "Ven 1", "Lun 5" ou nombre) */
+function readDayNumber(cells, headerRow, colLetter, col) {
+  const raw = cells[`${colLetter}${headerRow}`];
+  if (raw==null || raw==="") return col-1; // fallback : colonne B = jour 1
+  // prendre le DERNIER nombre de la chaîne (le n° de jour suit le nom du jour)
+  const nums = String(raw).match(/\d{1,2}/g);
+  if (nums && nums.length) return parseInt(nums[nums.length-1]);
+  return col-1;
+}
+
+function colName(n){ let s=""; while(n>0){ s=String.fromCharCode(65+(n-1)%26)+s; n=Math.floor((n-1)/26);} return s; }
+
+/* détecte les différences entre deux plannings */
+function detectPlanningChanges(oldP, newP) {
+  const changes = [];
+  const lbl = entry => entry && entry.creneaux ? entry.creneaux.map(c=>`${c.debut}-${c.fin}`).join(" / ") : "(rien)";
+  const allDates = new Set([...Object.keys(oldP), ...Object.keys(newP)]);
+  allDates.forEach(d=>{
+    const o = oldP[d]||{}, n = newP[d]||{};
+    const ids = new Set([...Object.keys(o), ...Object.keys(n)]);
+    ids.forEach(id=>{
+      const ol = lbl(o[id]);
+      const nl = lbl(n[id]);
+      if (ol!==nl) changes.push({ key:`${d}_${id}`, date:d, empId:id, empNom:emp(id)?.nom||id, oldLabel:ol, newLabel:nl });
+    });
+  });
+  return changes;
+}
+
+/* Dernier jour pointé clôturé = jour le plus récent, ANTÉRIEUR à aujourd'hui,
+   ayant au moins un pointage. Renvoie une date ISO ou null. */
+function dernierJourPointeCloture() {
+  const jours = [...new Set(DB.pointages.map(p=>p.date))]
+    .filter(d => d < App.currentDate)
+    .sort();
+  return jours.length ? jours[jours.length-1] : null;
+}
+
+/* Fusion d'un planning Excel importé avec le planning existant (restauré).
+   Les jours <= dernier jour pointé clôturé sont FIGÉS : on garde l'existant.
+   Tout écart proposé par l'Excel sur un jour figé est journalisé (option b).
+   Renvoie le planning fusionné. */
+function fusionnerPlanning(planningExcel) {
+  const gel = dernierJourPointeCloture(); // peut être null
+  const lbl = entry => entry && entry.creneaux ? entry.creneaux.map(c=>`${c.debut}-${c.fin}`).join(" / ") : "(rien)";
+  const fusion = {};
+  // 1) Conserver tout l'existant (priorité aux données restaurées)
+  Object.keys(DB.planning||{}).forEach(d=>{ fusion[d] = DB.planning[d]; });
+  // 2) Intégrer l'Excel, en respectant le gel
+  let conflits = 0, appliques = 0;
+  Object.keys(planningExcel).forEach(d=>{
+    const estFige = gel && d <= gel;
+    if (estFige) {
+      // jour figé : on NE remplace PAS, mais on trace tout écart
+      const ancien = DB.planning[d] || {};
+      const nouveau = planningExcel[d] || {};
+      const ids = new Set([...Object.keys(ancien), ...Object.keys(nouveau)]);
+      ids.forEach(id=>{
+        if (lbl(ancien[id]) !== lbl(nouveau[id])) {
+          conflits++;
+          logAction("Système", "Conflit planning ignoré (jour clôturé)",
+            `${emp(id)?.nom||id} — ${d} : l'import proposait ${lbl(nouveau[id])} mais le jour est déjà clôturé (conservé : ${lbl(ancien[id])})`);
+        }
+      });
+      // on garde l'existant tel quel (déjà copié à l'étape 1)
+    } else {
+      // jour non figé (futur ou non encore pointé) : on applique l'Excel
+      fusion[d] = planningExcel[d];
+      appliques++;
+    }
+  });
+  return { fusion, gel, conflits, appliques };
+}
+
+/* ====================================================================
+   MINI-LECTEUR XLSX (unzip + parsing XML) — sans dépendance
+   ==================================================================== */
+async function unzipXlsx(arrayBuffer) {
+  // Implémentation minimale de lecture ZIP (deflate via DecompressionStream)
+  const view = new DataView(arrayBuffer);
+  const files = {};
+  // Trouver l'End Of Central Directory
+  let eocd = arrayBuffer.byteLength - 22;
+  while (eocd>=0 && view.getUint32(eocd,true)!==0x06054b50) eocd--;
+  if (eocd<0) throw new Error("ZIP invalide");
+  const cdOffset = view.getUint32(eocd+16,true);
+  const cdCount = view.getUint16(eocd+10,true);
+  let p = cdOffset;
+  const decoder = new TextDecoder();
+  const entries = [];
+  for (let i=0;i<cdCount;i++){
+    if (view.getUint32(p,true)!==0x02014b50) break;
+    const method = view.getUint16(p+10,true);
+    const compSize = view.getUint32(p+20,true);
+    const nameLen = view.getUint16(p+28,true);
+    const extraLen = view.getUint16(p+30,true);
+    const commentLen = view.getUint16(p+32,true);
+    const localOff = view.getUint32(p+42,true);
+    const name = decoder.decode(new Uint8Array(arrayBuffer, p+46, nameLen));
+    entries.push({ name, method, compSize, localOff });
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  for (const en of entries){
+    const lview = view;
+    const lnameLen = lview.getUint16(en.localOff+26,true);
+    const lextraLen = lview.getUint16(en.localOff+28,true);
+    const dataStart = en.localOff + 30 + lnameLen + lextraLen;
+    const compData = new Uint8Array(arrayBuffer, dataStart, en.compSize);
+    let content;
+    if (en.method===0) { content = compData; }
+    else if (en.method===8) { content = await inflateRaw(compData); }
+    else continue;
+    files[en.name] = decoder.decode(content);
+  }
+  return files;
+}
+async function inflateRaw(bytes) {
+  const ds = new DecompressionStream("deflate-raw");
+  const stream = new Response(bytes).body.pipeThrough(ds);
+  const buf = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buf);
+}
+function parseSharedStrings(xml){
+  const arr=[]; if(!xml) return arr;
+  const re=/<si>([\s\S]*?)<\/si>/g; let m;
+  while(m=re.exec(xml)){
+    const texts=[...m[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map(x=>x[1]);
+    arr.push(decodeXml(texts.join("")));
+  }
+  return arr;
+}
+function parseWorkbook(xml){
+  const sheets=[];
+  const re=/<sheet[^>]*name="([^"]*)"[^>]*r:id="([^"]*)"[^>]*\/>/g; let m;
+  while(m=re.exec(xml)) sheets.push({name:decodeXml(m[1]), rId:m[2]});
+  if(!sheets.length){
+    const re2=/<sheet[^>]*r:id="([^"]*)"[^>]*name="([^"]*)"[^>]*\/>/g;
+    while(m=re2.exec(xml)) sheets.push({name:decodeXml(m[2]), rId:m[1]});
+  }
+  return { sheets };
+}
+function parseRels(xml){
+  const rels={}; if(!xml) return rels;
+  // Robuste à l'ordre des attributs (Id/Target/Type dans n'importe quel ordre)
+  const re=/<Relationship\b([^>]*)\/>/g; let m;
+  while(m=re.exec(xml)){
+    const attrs=m[1];
+    const id=(attrs.match(/\bId="([^"]*)"/)||[])[1];
+    const target=(attrs.match(/\bTarget="([^"]*)"/)||[])[1];
+    if(id&&target) rels[id]=target;
+  }
+  return rels;
+}
+function parseSheet(xml, sst){
+  const cells={};
+  const re=/<c r="([A-Z]+\d+)"(?:[^>]*t="([^"]*)")?[^>]*>([\s\S]*?)<\/c>/g; let m;
+  while(m=re.exec(xml)){
+    const ref=m[1], type=m[2];
+    const vMatch=m[3].match(/<v>([\s\S]*?)<\/v>/);
+    const isMatch=m[3].match(/<t[^>]*>([\s\S]*?)<\/t>/);
+    let val=null;
+    if(type==="s" && vMatch){ val=sst[parseInt(vMatch[1])]; }
+    else if(type==="inlineStr" && isMatch){ val=decodeXml(isMatch[1]); }
+    else if(vMatch){ val=vMatch[1]; }
+    if(val!=null) cells[ref]=val;
+  }
+  // cellules vides auto-closing
+  const re2=/<c r="([A-Z]+\d+)"(?:[^>]*t="([^"]*)")?[^>]*\/>/g;
+  return cells;
+}
+function decodeXml(s){
+  return String(s)
+    .replace(/&#10;/g," ").replace(/&#13;/g," ")
+    .replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(parseInt(n,10)))
+    .replace(/&#x([0-9a-fA-F]+);/g,(_,n)=>String.fromCharCode(parseInt(n,16)))
+    .replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&apos;/g,"'");
+}
+
+/* ====================================================================
+   HELPERS UI : modale, toast, download, horloge
+   ==================================================================== */
+function openModal(html){ const o=document.getElementById("overlay"); o.innerHTML=`<div class="modal">${html}</div>`; o.classList.add("active"); }
+function closeModal(){ document.getElementById("overlay").classList.remove("active"); document.getElementById("overlay").innerHTML=""; }
+function toast(msg,type){ const z=document.getElementById("toastZone"); const t=document.createElement("div"); t.className="toast "+(type||""); t.textContent=msg; z.appendChild(t); setTimeout(()=>{t.style.opacity="0"; t.style.transition="opacity .4s"; setTimeout(()=>t.remove(),400);},3200); }
+function downloadFile(content, name, mime){
+  const blob=new Blob(["\ufeff"+content],{type:mime+";charset=utf-8"});
+  const url=URL.createObjectURL(blob); const a=document.createElement("a");
+  a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url);
+}
+function tickClock(){
+  const d=new Date();
+  document.getElementById("clkTime").textContent=d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});
+  document.getElementById("clkDate").textContent=d.toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long"});
+
+  // Changement de jour métier (bascule à 6h) : on recale l'app sur le nouveau jour
+  const jour = businessDayISO(d);
+  if (jour !== App.currentDate) {
+    // RÈGLE 3 : clôturer les départs oubliés de la/des journée(s) terminée(s)
+    cloturerJoursEcoules(jour);
+    App.currentDate = jour;
+    App.jourConsulte = jour;
+    App.moisSel = jour.slice(0,7);
+    logAction("Système", "Nouveau jour", `Passage au ${jour} (bascule ${HEURE_BASCULE_JOUR}h)`);
+    // Si l'écran de badgeage est affiché, il repart à zéro pour la nouvelle journée
+    const badgeScreen = document.getElementById("scr-badge");
+    if (badgeScreen && badgeScreen.classList.contains("active")) {
+      App.renderBadge();
+    }
+    // Si un admin est sur l'onglet du jour, on le rafraîchit aussi
+    const adminScreen = document.getElementById("scr-admin");
+    if (adminScreen && adminScreen.classList.contains("active") && App.session) {
+      App.renderAdminPanel();
+    }
+  }
+
+  // Une fois par minute (à la seconde 0), vérifier le déblocage automatique de 8h
+  if (d.getSeconds()===0 && DB && DB.security && DB.security.locked) {
+    if (checkAutoUnlock()) {
+      // si l'écran de login verrouillé est affiché, le rafraîchir
+      const adminScreen = document.getElementById("scr-admin");
+      if (adminScreen && adminScreen.classList.contains("active") && !App.session) {
+        App.renderAdminLogin();
+      }
+    }
+  }
+
+  // PAUSE REPAS : si l'écran de badgeage est actif, gérer le minuteur live et la clôture auto
+  const badgeActif = document.getElementById("scr-badge") && document.getElementById("scr-badge").classList.contains("active");
+  if (DB && badgeActif) {
+    // clôture auto des pauses dépassant la fin de service prévue (anti-abus)
+    const aCloture = App.cloturerPausesDepassees();
+    // rafraîchir l'affichage chaque minute s'il y a une pause en cours (pour le minuteur live + bascule rouge)
+    const pauseActive = prevusDuJour(App.currentDate).some(id=>pauseEnCours(id, App.currentDate));
+    if (aCloture || (pauseActive && d.getSeconds()===0)) {
+      App.renderBadge();
+    }
+  }
+}
+
+/* ====================================================================
+   DÉMARRAGE
+   ==================================================================== */
+loadDB();
+// RÈGLE 3 : au démarrage, clôturer les départs oubliés des journées déjà écoulées
+cloturerJoursEcoules(App.currentDate);
+tickClock(); setInterval(tickClock,1000);
+// Au réveil de la tablette / retour sur l'onglet, recaler immédiatement le jour
+document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) tickClock(); });
+window.addEventListener("focus", tickClock);
+App.showBadge();
+// Rappel de sauvegarde mensuelle : on note au journal si elle est due
+try{ App.verifierRappelSauvegarde(); }catch(e){}
+</script>
+</body>
+</html>
