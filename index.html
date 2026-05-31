@@ -334,10 +334,18 @@ const NON_NOMS = new Set([
 function estNomValide(v) {
   const s = String(v || "").trim();
   if (s.length < 2) return false;                  // trop court
-  if (NON_NOMS.has(s.toUpperCase())) return false; // mot réservé
+  const up = s.toUpperCase();
+  if (NON_NOMS.has(up)) return false;              // mot réservé exact
+  if (/TOTAL|TOTAUX|ÉQUIPE|EQUIPE|PERSONNEL/.test(up)) return false; // lignes de totaux / en-têtes
   if (/^[\d\s.,:%-]+$/.test(s)) return false;      // que des chiffres/ponctuation
   if (!/[A-Za-zÀ-ÿ]/.test(s)) return false;        // aucune lettre
   return true;
+}
+/* Déduit le niveau d'accès à partir du libellé de poste de la Fiche Personnel */
+function accesDepuisPoste(poste) {
+  const p = String(poste || "").toLowerCase();
+  if (/manager|responsable|g[ée]rant|directeur|direction/.test(p)) return "manager";
+  return "salarie";
 }
 /* Renvoie le prochain code PIN à 4 chiffres libre (évite 0000 et les codes déjà pris) */
 function genererPin(used) {
@@ -347,21 +355,24 @@ function genererPin(used) {
   }
   return "1000";
 }
-/* Crée dans DB.team tout salarié du fichier absent de l'app.
-   Renvoie la liste [{nom, pin}] des salariés effectivement créés. */
-function ajouterSalariesDepuisFichier(noms) {
+/* Crée dans DB.team tout salarié absent de l'app à partir d'une liste [{nom, poste}].
+   Le poste devient le rôle affiché ; un poste "Manager/Responsable/Gérant" donne l'accès gestion.
+   Renvoie la liste [{nom, pin, role, access}] des salariés effectivement créés. */
+function ajouterSalaries(personnel) {
   const existants = new Set(DB.team.map(e => e.nom.toLowerCase().trim()));
   const used = new Set(DB.team.map(e => e.pin));
   const crees = [];
-  (noms || []).forEach(nomBrut => {
-    const nom = String(nomBrut || "").trim();
+  (personnel || []).forEach(p => {
+    const nom = String(p && p.nom || "").trim();
     if (!estNomValide(nom)) return;
     if (existants.has(nom.toLowerCase())) return;  // déjà présent
     existants.add(nom.toLowerCase());
+    const role = String(p && p.poste || "").trim() || "Salarié";
+    const access = accesDepuisPoste(p && p.poste);
     const pin = genererPin(used); used.add(pin);
     const id = "e_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    DB.team.push({ id, nom, role: "Salarié", pin, access: "salarie" });
-    crees.push({ nom, pin });
+    DB.team.push({ id, nom, role, pin, access });
+    crees.push({ id, nom, pin, role, access });
   });
   if (crees.length) saveDB();
   return crees;
@@ -427,7 +438,7 @@ function loadDB() {
       journal: [],      // { ts, who, action, detail }
       lastPlanningName: null,
       security: { failCount:0, locked:false, lockedAt:null },
-      settings: { emailjs:{ serviceId:"", templateId:"", publicKey:"" }, alertEmail:"", maxTries:3 },
+      settings: { emailjs:{ serviceId:"", templateId:"", publicKey:"" }, alertEmail:"", maxTries:3, seuilConflits:5 },
       lastBusinessDay: null,
       lastBackupMonth: null
     };
@@ -445,6 +456,7 @@ function loadDB() {
   DB.settings   = DB.settings || { emailjs:{ serviceId:"", templateId:"", publicKey:"" }, alertEmail:"", maxTries:3 };
   if (!DB.settings.emailjs) DB.settings.emailjs = { serviceId:"", templateId:"", publicKey:"" };
   if (!DB.settings.maxTries) DB.settings.maxTries = 3;
+  if (!DB.settings.seuilConflits) DB.settings.seuilConflits = 5;
   checkAutoUnlock();
 }
 
@@ -1587,7 +1599,7 @@ const App = {
         <h3 style="margin-top:0">📥 Importer le planning</h3>
         <p style="color:var(--ink-soft);font-size:.9rem;margin-bottom:18px">
           Chargez le fichier <b>planning_restaurant_2026.xlsx</b> (ou le mois souhaité). L'app lit les horaires prévus pour chaque salarié et les applique au calendrier.<br>
-          ✨ Les salariés présents dans le fichier mais absents de l'app sont <b>créés automatiquement</b> avec un code PIN temporaire (affiché après l'import et consigné au Journal).</p>
+          ✨ Les salariés sont lus depuis la feuille <b>« Fiche Personnel »</b> (nom + poste). Ceux absents de l'app sont <b>créés automatiquement</b> avec leur poste comme rôle et un code PIN temporaire ; un poste « Manager » donne l'accès gestion. La liste est affichée après l'import et consignée au Journal.</p>
 
         <label class="field"><span>Fichier planning (.xlsx)</span>
           <input type="file" id="planFile" accept=".xlsx"></label>
@@ -1742,10 +1754,18 @@ const App = {
         ? `<button class="btn btn-ghost btn-sm" onclick="App.revealPin('${e.id}')">👁 Voir</button>` : "";
       const btnDel = canDelete
         ? `<button class="btn btn-ghost btn-sm" style="color:#e8556b" onclick="App.deleteEmp('${e.id}')">Supprimer</button>` : "";
+      // changement de niveau d'accès : réservé au Dirigeant
+      const btnAcces = isDir
+        ? `<button class="btn btn-ghost btn-sm" onclick="App.changeAccess('${e.id}')">Rôle d'accès</button>` : "";
+      const tagAcces = e.access==="dirigeant"
+        ? `<span class="badge-delta" style="background:rgba(232,85,107,.15);color:#e8556b;margin-left:6px">Dirigeant</span>`
+        : e.access==="manager"
+          ? `<span class="badge-delta" style="background:rgba(240,168,48,.18);color:var(--accent);margin-left:6px">Manager</span>`
+          : "";
       return `<tr>
-        <td>${e.nom}<div style="color:var(--ink-soft);font-size:.78rem">${e.role}</div></td>
+        <td>${e.nom}${tagAcces}<div style="color:var(--ink-soft);font-size:.78rem">${e.role}</div></td>
         <td class="num" style="letter-spacing:.3em">••••</td>
-        <td><div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${btnPin}${btnVoir}${btnDel}</div></td>
+        <td><div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${btnPin}${btnVoir}${btnAcces}${btnDel}</div></td>
       </tr>`;
     }).join("");
     c.innerHTML = `
@@ -1760,14 +1780,22 @@ const App = {
       </table></div>`;
   },
   addEmp() {
+    const isDir = this.session.access==="dirigeant";
+    const selAcces = isDir ? `
+      <label class="field"><span>Rôle d'accès</span>
+        <select id="neAccess">
+          <option value="salarie">Salarié (pointage uniquement)</option>
+          <option value="manager">Manager (accès gestion)</option>
+        </select></label>` : "";
     openModal(`
       <button class="modal-close" onclick="closeModal()">×</button>
       <h3>➕ Nouveau salarié</h3>
       <div class="modal-sub">Le code PIN peut rester vide : un code temporaire sera généré automatiquement.</div>
       <label class="field"><span>Nom complet</span>
         <input type="text" id="neNom" placeholder="Ex. : Léa Fontaine"></label>
-      <label class="field"><span>Rôle (facultatif)</span>
-        <input type="text" id="neRole" placeholder="Ex. : Serveuse"></label>
+      <label class="field"><span>Rôle / poste (facultatif)</span>
+        <input type="text" id="neRole" placeholder="Ex. : Serveuse, Chef de rang…"></label>
+      ${selAcces}
       <label class="field"><span>Code PIN (4 chiffres, facultatif)</span>
         <input type="text" id="nePin" inputmode="numeric" maxlength="4" placeholder="auto" style="letter-spacing:.3em;text-align:center"></label>
       <div class="row mt">
@@ -1779,6 +1807,10 @@ const App = {
     const nom = (document.getElementById("neNom").value||"").trim();
     const role = (document.getElementById("neRole").value||"").trim() || "Salarié";
     let pin = (document.getElementById("nePin").value||"").trim();
+    // niveau d'accès : seul le Dirigeant peut créer un Manager
+    const selEl = document.getElementById("neAccess");
+    let access = "salarie";
+    if (this.session.access==="dirigeant" && selEl && selEl.value==="manager") access = "manager";
     if (!estNomValide(nom)) { toast("Indiquez un nom valide.", "err"); return; }
     if (DB.team.some(e=>e.nom.toLowerCase().trim()===nom.toLowerCase())) {
       toast("Un salarié porte déjà ce nom.", "err"); return;
@@ -1790,11 +1822,45 @@ const App = {
       pin = genererPin(used);
     }
     const id = "e_" + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
-    DB.team.push({ id, nom, role, pin, access:"salarie" });
+    DB.team.push({ id, nom, role, pin, access });
     saveDB();
-    logAction(emp(this.session.empId).nom, "Ajout salarié", `${nom} créé (PIN ${pin})`);
+    logAction(emp(this.session.empId).nom, "Ajout salarié", `${nom} créé (PIN ${pin})${access!=="salarie"?` — accès ${access}`:""}`);
     closeModal();
     toast(`${nom} ajouté — PIN ${pin}.`, "ok");
+    this.renderAdminPanel();
+  },
+  /* Changer le niveau d'accès d'un membre (réservé au Dirigeant) */
+  changeAccess(empId) {
+    if (this.session.access!=="dirigeant") { toast("Réservé au Dirigeant.", "err"); return; }
+    const e = emp(empId); if (!e) return;
+    const opt = (val,lib,desc) => `
+      <button class="btn ${e.access===val?'btn-primary':'btn-ghost'} btn-block" style="text-align:left;margin-bottom:8px"
+        onclick="App.saveAccess('${empId}','${val}')">
+        <b>${lib}</b><div style="font-size:.78rem;opacity:.8">${desc}</div></button>`;
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>Rôle d'accès — ${e.nom}</h3>
+      <div class="modal-sub">Choisissez le niveau d'accès. Le rôle actuel est mis en évidence.</div>
+      ${opt("salarie","Salarié","Peut uniquement pointer ses heures.")}
+      ${opt("manager","Manager","Accès à l'espace gestion : planning, pointages, salariés.")}
+      ${opt("dirigeant","Dirigeant","Tous les droits, y compris les paramètres.")}
+      <button class="btn btn-ghost btn-block mt" onclick="closeModal()">Annuler</button>`);
+  },
+  saveAccess(empId, level) {
+    if (this.session.access!=="dirigeant") { toast("Réservé au Dirigeant.", "err"); return; }
+    const e = DB.team.find(t=>t.id===empId); if (!e) { closeModal(); return; }
+    if (!["salarie","manager","dirigeant"].includes(level)) { closeModal(); return; }
+    // garde-fou : il doit toujours rester au moins un Dirigeant
+    if (e.access==="dirigeant" && level!=="dirigeant") {
+      const autresDir = DB.team.filter(t=>t.access==="dirigeant" && t.id!==empId).length;
+      if (autresDir===0) { toast("Il doit rester au moins un Dirigeant.", "err"); return; }
+    }
+    const ancien = e.access;
+    e.access = level;
+    saveDB();
+    logAction(emp(this.session.empId).nom, "Changement de rôle", `${e.nom} : ${ancien} → ${level}`);
+    closeModal();
+    toast(`${e.nom} est maintenant ${level==="salarie"?"salarié":level}.`, "ok");
     this.renderAdminPanel();
   },
   deleteEmp(empId) {
@@ -2104,9 +2170,58 @@ const App = {
     toast(nbLignes ? `Export journal généré : ${nbLignes} entrée(s).` : "Export généré (aucune entrée dans la plage choisie).", "ok");
   },
   resetData() {
-    if (!confirm("Réinitialiser TOUTES les données (pointages, planning, journal) ? Action irréversible.")) return;
+    const aNbP = DB.pointages.length;
+    const aNbJ = Object.keys(DB.planning||{}).length;
+    const aNbS = DB.team.length;
+    openModal(`
+      <button class="modal-close" onclick="App._cancelReset()">×</button>
+      <h3>🗑️ Effacer toutes les données</h3>
+      <div class="modal-sub" style="margin-bottom:14px">
+        Vous allez <b>tout effacer</b> : pointages, planning, salariés, journal et paramètres. <b>Action irréversible.</b>
+      </div>
+      <div style="background:rgba(232,85,107,.08);border:1px solid rgba(232,85,107,.4);border-radius:10px;padding:12px 14px;font-size:.85rem;margin-bottom:16px;line-height:1.6">
+        <b>💾 Ce qui sera effacé sur cette tablette :</b><br>
+        ${aNbP} pointage(s), ${aNbJ} jour(s) planifié(s), ${aNbS} salarié(s).
+      </div>
+      <p style="font-size:.88rem;color:var(--ink-soft);margin-bottom:16px;line-height:1.55">
+        Par sécurité, téléchargez d'abord une <b>sauvegarde d'urgence</b>. L'effacement ne sera débloqué qu'une fois cette sauvegarde générée.</p>
+      <button class="btn btn-green btn-block" onclick="App._telechargerAvantEffacement()">⬇️ 1. Télécharger une sauvegarde d'urgence</button>
+      <div style="text-align:center;color:var(--ink-dim);font-size:.8rem;margin:14px 0">— puis —</div>
+      <button class="btn btn-red btn-block" onclick="App._doReset()" id="btnDoReset" disabled style="opacity:.5">🗑️ 2. Effacer définitivement toutes les données</button>
+      <div style="text-align:center;margin-top:14px">
+        <span class="pill-link" onclick="App._forceReset()" style="color:var(--ink-dim);font-size:.78rem">Effacer sans sauvegarde (déconseillé)</span>
+      </div>
+      <div style="text-align:center;margin-top:8px">
+        <span class="pill-link" onclick="App._cancelReset()" style="font-size:.85rem">Annuler</span>
+      </div>`);
+  },
+  _telechargerAvantEffacement() {
+    // sauvegarde d'urgence de l'état actuel AVANT tout effacement
+    const data = JSON.stringify(DB, null, 0);
+    const stamp = todayISO();
+    downloadFile(data, `sauvegarde_AVANT-effacement_${stamp}.json`, "application/json");
+    logAction(this.session?emp(this.session.empId).nom:"?", "Sauvegarde d'urgence (avant effacement)", `Fichier du ${stamp}`);
+    toast("Sauvegarde d'urgence téléchargée. Vous pouvez maintenant effacer.", "ok");
+    const b = document.getElementById("btnDoReset");
+    if (b) { b.disabled = false; b.style.opacity = "1"; }
+  },
+  _performReset() {
     localStorage.removeItem(STORE_KEY); DB=null; loadDB();
-    toast("Données réinitialisées.", "ok"); this.showBadge();
+    closeModal();
+    toast("Toutes les données ont été effacées.", "ok");
+    this.session = null; this.showBadge();
+  },
+  _doReset() {
+    if (!confirm("Dernière confirmation : effacer DÉFINITIVEMENT toutes les données de cette tablette ?")) return;
+    this._performReset();
+  },
+  _forceReset() {
+    if (!confirm("Effacer toutes les données SANS sauvegarde d'urgence ? C'est définitif et irrécupérable.")) return;
+    this._performReset();
+  },
+  _cancelReset() {
+    closeModal();
+    toast("Effacement annulé.", "ok");
   },
 
   /* ----- onglet PARAMÈTRES (Dirigeant) : alerte mail + sécurité ----- */
@@ -2119,6 +2234,12 @@ const App = {
         Après plusieurs codes incorrects à l'entrée de l'espace gestion, le système se verrouille. Il se débloque automatiquement le lendemain à 8h00, ou immédiatement avec le code Direction.</p>
       <label class="field" style="max-width:260px"><span>Nombre de tentatives avant blocage</span>
         <input type="number" id="stTries" min="1" max="10" value="${s.maxTries}"></label>
+
+      <h3 style="font-size:1.15rem;margin:22px 0 6px">Import du planning</h3>
+      <p style="color:var(--ink-soft);font-size:.88rem;margin-bottom:14px">
+        Quand un <b>Manager</b> réimporte un planning, au-delà de ce nombre de créneaux modifiés, la liste détaillée des changements s'affiche avant validation. En dessous, il valide avec un simple commentaire. La Direction valide toujours avec un simple commentaire, sans liste.</p>
+      <label class="field" style="max-width:260px"><span>Seuil d'affichage du détail (Manager)</span>
+        <input type="number" id="stSeuil" min="1" max="100" value="${s.seuilConflits||5}"></label>
 
       <h3 style="font-size:1.15rem;margin:22px 0 6px">Alerte e-mail (en cas de verrouillage)</h3>
       <p style="color:var(--ink-soft);font-size:.88rem;margin-bottom:14px">
@@ -2144,6 +2265,8 @@ const App = {
   saveParams() {
     const tries = parseInt(document.getElementById("stTries").value,10);
     DB.settings.maxTries = (tries>=1 && tries<=10) ? tries : 3;
+    const seuil = parseInt(document.getElementById("stSeuil").value,10);
+    DB.settings.seuilConflits = (seuil>=1 && seuil<=100) ? seuil : 5;
     DB.settings.alertEmail = document.getElementById("stEmail").value.trim();
     DB.settings.emailjs = {
       serviceId: document.getElementById("stSid").value.trim(),
@@ -2192,9 +2315,12 @@ const App = {
     if (!f) { toast("Choisissez un fichier.", "err"); return; }
     try {
       const data = await f.arrayBuffer();
-      let { planning: planningExcel, inconnues, noms } = await parseXlsxPlanning(data);
-      // CRÉATION AUTO : tout salarié du fichier absent de l'app est créé avec un PIN temporaire
-      const nouveaux = ajouterSalariesDepuisFichier(noms);
+      let { planning: planningExcel, inconnues, noms, personnel } = await parseXlsxPlanning(data);
+      // CRÉATION AUTO depuis la Fiche Personnel (nom + poste), complétée par les noms des grilles
+      const roster = (personnel && personnel.length) ? personnel.slice() : [];
+      const dejaListes = new Set(roster.map(p=>p.nom.toLowerCase().trim()));
+      (noms||[]).forEach(n=>{ if(!dejaListes.has(String(n).toLowerCase().trim())){ roster.push({nom:n, poste:""}); dejaListes.add(String(n).toLowerCase().trim()); }});
+      const nouveaux = ajouterSalaries(roster);
       this._nouveauxSalaries = nouveaux;
       if (nouveaux.length) {
         // re-lire le fichier : les nouveaux salariés existent désormais, leur planning peut se rattacher
@@ -2204,108 +2330,128 @@ const App = {
       DB._dernieresInconnues = inconnues || {};
       // FUSION : protéger les jours déjà pointés/clôturés, appliquer l'Excel au reste
       const { fusion, gel, conflits, appliques } = fusionnerPlanning(planningExcel);
-      // détection de changements (seulement sur la partie réellement modifiée = jours non figés)
-      const changes = detectPlanningChanges(DB.planning, fusion);
-      // Compteur d'inconnues pour les messages
+      // détection des changements ; on ne traite comme "conflits à justifier" que les
+      // créneaux EXISTANTS modifiés ou supprimés (pas les simples ajouts/nouveaux jours)
+      const tousChanges = detectPlanningChanges(DB.planning, fusion);
+      const changes = tousChanges.filter(c => c.oldLabel !== "(rien)");
       const nbInco = Object.keys(inconnues||{}).length;
       const totInco = Object.values(inconnues||{}).reduce((a,b)=>a+b,0);
-      if (changes.length && this.session && this.session.access!=="dirigeant") {
-        // manager : commentaire obligatoire par changement
-        this.pendingPlanning = fusion; this.pendingChanges = changes;
-        this._importMeta = { name:f.name, gel, conflits, nbInco, totInco };
-        this.askChangeComments(0, {});
-        return;
+      // import en attente (utilisé par les boutons des popups de confirmation)
+      this.pendingImport = { fusion, changes, meta: { name:f.name, gel, conflits, appliques, nbInco, totInco } };
+      const seuil = (DB.settings && DB.settings.seuilConflits) || 5;
+      const estDirection = !this.session || this.session.access==="dirigeant";
+      if (changes.length === 0) {
+        this.finaliserImport("");                       // aucun conflit : on applique direct
+      } else if (estDirection) {
+        this.confirmerImportDirection();                // Direction : commentaire + validation, sans liste ni seuil
+      } else {
+        this.confirmerImportManager(changes.length > seuil); // Manager : commentaire + validation ; liste si > seuil
       }
-      DB.planning = fusion; DB.lastPlanningName = f.name; saveDB();
-      const flags = rattraperImport(this.currentDate);
-      // Journaliser les salariés créés automatiquement (avec PIN temporaire)
-      if (this._nouveauxSalaries && this._nouveauxSalaries.length) {
-        const who = this.session ? emp(this.session.empId).nom : "(import direct)";
-        const liste = this._nouveauxSalaries.map(s=>`${s.nom} (PIN ${s.pin})`).join(", ");
-        logAction(who, "Salariés créés à l'import",
-          `${this._nouveauxSalaries.length} salarié(s) ajouté(s) avec PIN temporaire : ${liste}`);
-      }
-      // Journaliser les inconnues si présentes
-      if (nbInco) {
-        const liste = Object.entries(inconnues).map(([k,n])=>`"${k}" (×${n})`).join(", ");
-        logAction(this.session?emp(this.session.empId).nom:"(import direct)", "Cases planning non reconnues",
-          `${totInco} case(s) ignorée(s) à l'import (${nbInco} valeur(s) distincte(s)) : ${liste}`);
-      }
-      logAction(this.session?emp(this.session.empId).nom:"(import direct)", "Import planning",
-        `${f.name} — ${appliques} jour(s) appliqué(s)${gel?`, jours ≤ ${gel} protégés`:''}${conflits?`, ${conflits} conflit(s) ignoré(s)`:''}${flags?` · ${flags} absence(s) à vérifier`:''}${nbInco?` · ${totInco} case(s) non reconnue(s)`:''}`);
-      closeModal();
-      let msg = "Planning importé.";
-      const nbNew = (this._nouveauxSalaries||[]).length;
-      if (nbNew) msg += ` ${nbNew} salarié(s) créé(s).`;
-      if (gel) msg += ` Jours jusqu'au ${gel} protégés (déjà pointés).`;
-      if (conflits) msg += ` ${conflits} conflit(s) ignoré(s) et journalisé(s).`;
-      if (flags) msg += ` ${flags} absence(s) à vérifier.`;
-      if (nbInco) msg += ` ⚠️ ${totInco} case(s) non reconnue(s) — voir l'onglet Planning.`;
-      toast(msg, "ok");
-      if (this.session) { this.adminTab = "planning"; this.renderAdminPanel(); }
-      else this.showBadge();
-      this.montrerNouveauxSalaries(); // affiche la liste des PIN temporaires si besoin
     } catch(e) {
       console.error(e); toast("Impossible de lire ce fichier : "+e.message, "err");
     }
   },
-  askChangeComments(idx, acc) {
-    if (idx>=this.pendingChanges.length) {
-      // tout commenté : appliquer
-      DB.planning = this.pendingPlanning;
-      if (this._importMeta) DB.lastPlanningName = this._importMeta.name;
-      saveDB();
-      const who = emp(this.session.empId).nom;
-      this.pendingChanges.forEach(ch=>{
-        logAction(who, "Changement planning",
-          `${ch.empNom} — ${ch.date} : ${ch.oldLabel} → ${ch.newLabel}. Motif : ${acc[ch.key]}`);
-      });
-      const flags = rattraperImport(this.currentDate);
-      const meta = this._importMeta || {};
-      if (this._nouveauxSalaries && this._nouveauxSalaries.length) {
-        const liste = this._nouveauxSalaries.map(s=>`${s.nom} (PIN ${s.pin})`).join(", ");
-        logAction(who, "Salariés créés à l'import",
-          `${this._nouveauxSalaries.length} salarié(s) ajouté(s) avec PIN temporaire : ${liste}`);
-      }
-      if (meta.nbInco) {
-        const inco = DB._dernieresInconnues || {};
-        const liste = Object.entries(inco).map(([k,n])=>`"${k}" (×${n})`).join(", ");
-        logAction(who, "Cases planning non reconnues",
-          `${meta.totInco} case(s) ignorée(s) (${meta.nbInco} valeur(s) distincte(s)) : ${liste}`);
-      }
-      closeModal();
-      let msg = `${this.pendingChanges.length} changement(s) appliqué(s) et justifié(s).`;
-      const nbNew = (this._nouveauxSalaries||[]).length;
-      if (nbNew) msg += ` ${nbNew} salarié(s) créé(s).`;
-      if (meta.gel) msg += ` Jours jusqu'au ${meta.gel} protégés.`;
-      if (meta.conflits) msg += ` ${meta.conflits} conflit(s) ignoré(s).`;
-      if (flags) msg += ` ${flags} absence(s) à vérifier.`;
-      if (meta.nbInco) msg += ` ⚠️ ${meta.totInco} case(s) non reconnue(s) — voir l'onglet Planning.`;
-      toast(msg, "ok");
-      if (this.session) { this.adminTab = "planning"; this.renderAdminPanel(); }
-      else this.showBadge();
-      this.montrerNouveauxSalaries();
-      return;
-    }
-    const ch = this.pendingChanges[idx];
-    openModal(`
-      <h3>Changement ${idx+1}/${this.pendingChanges.length}</h3>
-      <div class="modal-sub">Justifiez ce changement de planning (commentaire obligatoire).</div>
-      <div class="table-card mb" style="padding:14px">
-        <b>${ch.empNom}</b> — ${frDate(ch.date)}<br>
-        <span style="color:var(--ink-soft)">${ch.oldLabel} → <b style="color:var(--accent)">${ch.newLabel}</b></span>
-      </div>
-      <label class="field"><span>Motif précis</span>
-        <textarea id="chC" placeholder="Ex. : échange de service validé avec Emma le 12/10"></textarea></label>
-      <button class="btn btn-primary btn-block" onclick="App.nextChange(${idx})">Valider et continuer</button>`);
+  /* Récap HTML de la liste des conflits, pour les popups */
+  _detailChangesHTML() {
+    const ch = (this.pendingImport && this.pendingImport.changes) || [];
+    return ch.map(c=>`<tr><td>${c.empNom}</td><td class="num">${frDate(c.date)}</td>
+        <td style="color:var(--ink-soft)">${c.oldLabel} → <b style="color:var(--accent)">${c.newLabel}</b></td></tr>`).join("");
   },
-  nextChange(idx) {
-    const v = document.getElementById("chC").value.trim();
+  /* Popup Manager : commentaire obligatoire ; liste détaillée si au-dessus du seuil */
+  confirmerImportManager(avecDetail) {
+    const n = (this.pendingImport && this.pendingImport.changes.length) || 0;
+    const detail = avecDetail ? `
+      <div class="table-card mb" style="max-height:240px;overflow:auto"><table>
+        <thead><tr><th>Salarié</th><th>Jour</th><th>Changement</th></tr></thead>
+        <tbody>${this._detailChangesHTML()}</tbody></table></div>` : "";
+    openModal(`
+      <button class="modal-close" onclick="App.annulerImport()">×</button>
+      <h3>Mise à jour du planning — ${n} changement(s)</h3>
+      <div class="modal-sub">${avecDetail?"Beaucoup de créneaux changent. Vérifiez la liste ci-dessous, puis justifiez la mise à jour.":"Justifiez la mise à jour du planning."} Commentaire obligatoire.</div>
+      ${detail}
+      <label class="field"><span>Motif de la mise à jour</span>
+        <textarea id="impMotif" placeholder="Ex. : planning de juin / échanges de services validés"></textarea></label>
+      <div class="row mt">
+        <button class="btn btn-ghost" onclick="App.annulerImport()">Annuler</button>
+        <button class="btn btn-primary" onclick="App.validerImportAvecMotif()">Valider l'import</button>
+      </div>`);
+  },
+  /* Popup Direction : commentaire + validation, sans liste ni seuil */
+  confirmerImportDirection() {
+    const n = (this.pendingImport && this.pendingImport.changes.length) || 0;
+    openModal(`
+      <button class="modal-close" onclick="App.annulerImport()">×</button>
+      <h3>Mise à jour du planning — ${n} changement(s)</h3>
+      <div class="modal-sub">Indiquez le motif de la mise à jour, puis validez.</div>
+      <label class="field"><span>Motif de la mise à jour</span>
+        <textarea id="impMotif" placeholder="Ex. : planning de juin"></textarea></label>
+      <div class="row mt">
+        <button class="btn btn-ghost" onclick="App.annulerImport()">Annuler</button>
+        <button class="btn btn-primary" onclick="App.validerImportAvecMotif()">Valider l'import</button>
+      </div>`);
+  },
+  validerImportAvecMotif() {
+    const v = (document.getElementById("impMotif").value||"").trim();
     if (!v) { toast("Commentaire obligatoire.", "err"); return; }
-    const ch = this.pendingChanges[idx];
-    this._acc = this._acc || {};
-    this._acc[ch.key] = v;
-    this.askChangeComments(idx+1, this._acc);
+    this.finaliserImport(v);
+  },
+  /* Annulation : on retire les salariés tout juste créés (au cas où ce serait le mauvais fichier) */
+  annulerImport() {
+    const nv = this._nouveauxSalaries || [];
+    if (nv.length) {
+      const ids = new Set(nv.map(s=>s.id));
+      DB.team = DB.team.filter(t=>!ids.has(t.id));
+      saveDB();
+    }
+    this._nouveauxSalaries = null;
+    this.pendingImport = null;
+    closeModal();
+    toast("Import annulé. Aucun changement appliqué.", "err");
+  },
+  /* Application effective de l'import en attente + journalisation (toujours le détail) */
+  finaliserImport(motif) {
+    const pend = this.pendingImport;
+    if (!pend) { closeModal(); return; }
+    const { fusion, meta, changes } = pend;
+    DB.planning = fusion; DB.lastPlanningName = meta.name; saveDB();
+    const flags = rattraperImport(this.currentDate);
+    const who = this.session ? emp(this.session.empId).nom : "(import direct)";
+    // 1) salariés créés (avec PIN temporaire)
+    if (this._nouveauxSalaries && this._nouveauxSalaries.length) {
+      const liste = this._nouveauxSalaries.map(s=>`${s.nom} (PIN ${s.pin})`).join(", ");
+      logAction(who, "Salariés créés à l'import",
+        `${this._nouveauxSalaries.length} salarié(s) ajouté(s) avec PIN temporaire : ${liste}`);
+    }
+    // 2) détail des conflits — une seule entrée, automatique
+    if (changes && changes.length) {
+      const detail = changes.map(c=>`${c.empNom} ${c.date} : ${c.oldLabel} → ${c.newLabel}`).join(" ; ");
+      logAction(who, "Mise à jour du planning",
+        `${changes.length} créneau(x) modifié(s)${motif?`. Motif : ${motif}`:""}. Détail : ${detail}`);
+    }
+    // 3) cases non reconnues
+    if (meta.nbInco) {
+      const inco = DB._dernieresInconnues || {};
+      const liste = Object.entries(inco).map(([k,n])=>`"${k}" (×${n})`).join(", ");
+      logAction(who, "Cases planning non reconnues",
+        `${meta.totInco} case(s) ignorée(s) (${meta.nbInco} valeur(s) distincte(s)) : ${liste}`);
+    }
+    // 4) ligne d'import standard
+    logAction(who, "Import planning",
+      `${meta.name} — ${meta.appliques} jour(s) appliqué(s)${meta.gel?`, jours ≤ ${meta.gel} protégés`:''}${meta.conflits?`, ${meta.conflits} conflit(s) ignoré(s)`:''}${flags?` · ${flags} absence(s) à vérifier`:''}${meta.nbInco?` · ${meta.totInco} case(s) non reconnue(s)`:''}`);
+    this.pendingImport = null;
+    closeModal();
+    let msg = "Planning importé.";
+    const nbNew = (this._nouveauxSalaries||[]).length;
+    if (nbNew) msg += ` ${nbNew} salarié(s) créé(s).`;
+    if (changes && changes.length) msg += ` ${changes.length} créneau(x) modifié(s).`;
+    if (meta.gel) msg += ` Jours jusqu'au ${meta.gel} protégés (déjà pointés).`;
+    if (meta.conflits) msg += ` ${meta.conflits} conflit(s) ignoré(s).`;
+    if (flags) msg += ` ${flags} absence(s) à vérifier.`;
+    if (meta.nbInco) msg += ` ⚠️ ${meta.totInco} case(s) non reconnue(s) — voir l'onglet Planning.`;
+    toast(msg, "ok");
+    if (this.session) { this.adminTab = "planning"; this.renderAdminPanel(); }
+    else this.showBadge();
+    this.montrerNouveauxSalaries();
   },
   /* Affiche la liste des salariés créés à l'import avec leur PIN temporaire.
      Les codes étant masqués partout ailleurs, c'est le seul endroit où on les voit. */
@@ -2314,15 +2460,16 @@ const App = {
     this._nouveauxSalaries = null; // ne pas réafficher
     if (!nv.length) return;
     const lignes = nv.map(s=>`<tr>
-        <td>${s.nom}</td>
+        <td>${s.nom}${s.access==="manager"?` <span class="badge-delta" style="background:rgba(240,168,48,.18);color:var(--accent)">Manager</span>`:""}<div style="color:var(--ink-soft);font-size:.78rem">${s.role||"Salarié"}</div></td>
         <td class="num" style="letter-spacing:.25em;font-weight:600">${s.pin}</td>
       </tr>`).join("");
+    const nbMgr = nv.filter(s=>s.access==="manager").length;
     openModal(`
       <button class="modal-close" onclick="closeModal()">×</button>
       <h3>👥 ${nv.length} salarié(s) créé(s)</h3>
-      <div class="modal-sub">Ces salariés étaient dans le fichier mais pas encore dans l'app. Ils ont reçu un <b>code PIN temporaire</b>. Communiquez-le à chacun pour pointer, puis modifiez-le quand vous voulez dans l'onglet <b>🔑 Salariés &amp; PIN</b>.</div>
+      <div class="modal-sub">Importés depuis la « Fiche Personnel » avec leur poste. Chacun a reçu un <b>code PIN temporaire</b> ; communiquez-le pour pointer, puis modifiez-le dans l'onglet <b>🔑 Salariés &amp; PIN</b>.${nbMgr?` <b>${nbMgr}</b> manager détecté(s) d'après le poste.`:""}</div>
       <div class="table-card" style="margin-top:6px"><table>
-        <thead><tr><th>Salarié</th><th>PIN temporaire</th></tr></thead>
+        <thead><tr><th>Salarié / poste</th><th>PIN temporaire</th></tr></thead>
         <tbody>${lignes}</tbody>
       </table></div>
       <p style="font-size:.78rem;color:var(--ink-dim);margin-top:12px">Cette liste est aussi enregistrée dans le <b>Journal</b>. Pensez à changer ces codes rapidement pour la sécurité.</p>
@@ -2347,12 +2494,29 @@ async function parseXlsxPlanning(arrayBuffer) {
   // header_row par mois (comme dans le planning)
   const HEADER = {1:11,2:11,3:11,4:12,5:11,6:11,7:11,8:12,9:11,10:11,11:11,12:11};
 
-  // Construire l'ordre des salariés depuis la Fiche Personnel (lignes 4..)
+  // Construire la liste des salariés depuis la Fiche Personnel (Nom = col A, Poste = col B, à partir de la ligne 4)
   let fiche = null;
   sheets.forEach(s=>{ if (s.name==="Fiche Personnel") fiche = s; });
   const planning = {};
   const inconnues = {}; // valeurs non reconnues dans les cases horaires (pour signaler à l'import)
-  const nomsVus = new Set(); // tous les noms de salariés rencontrés dans le fichier
+  const nomsVus = new Set(); // noms rencontrés dans les feuilles mensuelles (filet de sécurité)
+  const personnel = [];     // [{nom, poste}] issu de la Fiche Personnel
+
+  if (fiche) {
+    const fpath = "xl/" + rels[fiche.rId].replace(/^\/?xl\//,"").replace(/^\//,"");
+    const fxml = zip[fpath] || zip["xl/"+rels[fiche.rId]] || zip[rels[fiche.rId]];
+    if (fxml) {
+      const fcells = parseSheet(fxml, sst);
+      let vides = 0;
+      for (let r = 4; r <= 60 && vides < 3; r++) {
+        const nom = fcells[`A${r}`];
+        if (!nom || String(nom).trim() === "") { vides++; continue; }
+        vides = 0;
+        if (!estNomValide(nom)) continue; // ignore "TOTAUX ÉQUIPE", en-têtes, etc.
+        personnel.push({ nom: String(nom).trim(), poste: fcells[`B${r}`] ? String(fcells[`B${r}`]).trim() : "" });
+      }
+    }
+  }
 
   // map nom -> empId de notre équipe
   function matchEmp(nom) {
@@ -2403,7 +2567,7 @@ async function parseXlsxPlanning(arrayBuffer) {
       }
     }
   }
-  return { planning, inconnues, noms: [...nomsVus] };
+  return { planning, inconnues, noms: [...nomsVus], personnel };
 }
 
 /* numéro de jour depuis la ligne d'en-tête (ex "Ven 1", "Lun 5" ou nombre) */
