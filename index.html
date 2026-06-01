@@ -453,6 +453,7 @@ function loadDB() {
   DB.journal    = DB.journal || [];
   DB.security   = DB.security || { failCount:0, locked:false, lockedAt:null };
   DB.aVerifier  = DB.aVerifier || {};
+  DB.absences   = DB.absences || {};
   DB.settings   = DB.settings || { emailjs:{ serviceId:"", templateId:"", publicKey:"" }, alertEmail:"", maxTries:3 };
   if (!DB.settings.emailjs) DB.settings.emailjs = { serviceId:"", templateId:"", publicKey:"" };
   if (!DB.settings.maxTries) DB.settings.maxTries = 3;
@@ -653,6 +654,15 @@ function getPrevu(empId, dateISO) {
 /* Un salarié est-il un renfort imprévu ce jour-là ? */
 function estRenfort(empId, dateISO) {
   return !!(DB.renforts[dateISO] && DB.renforts[dateISO][empId]);
+}
+/* Un salarié a-t-il été marqué absent (par la gestion) ce jour-là ? */
+function estAbsent(empId, dateISO) {
+  return !!(DB.absences && DB.absences[dateISO] && DB.absences[dateISO][empId]);
+}
+/* Type de statut posé : "absent" | "maladie" | null */
+function typeAbsence(empId, dateISO) {
+  const a = DB.absences && DB.absences[dateISO] && DB.absences[dateISO][empId];
+  return a ? (a.type || "absent") : null;
 }
 
 /* POINT B — Le badgeage est-il devenu impossible pour ce salarié aujourd'hui ?
@@ -1142,6 +1152,10 @@ const App = {
       ts: now.getTime(),
       signature: sigData
     });
+    // si la personne avait été marquée absente mais badge finalement, on lève l'absence
+    if (DB.absences && DB.absences[this.currentDate] && DB.absences[this.currentDate][this.badgeTarget]) {
+      delete DB.absences[this.currentDate][this.badgeTarget];
+    }
     saveDB();
     closeModal();
     toast(`✅ ${e.nom} — ${this.badgeAction==='in'?'arrivée':'départ'} enregistré à ${nowHM(now)}`, "ok");
@@ -1366,11 +1380,17 @@ const App = {
       else if (extra)   prevuLabel = '<span style="color:var(--blue)">Extra</span>';
       else prevuLabel = '—';
       // Réel : liste des créneaux pointés
-      const aVerif = DB.aVerifier && DB.aVerifier[date] && DB.aVerifier[date][id] && !paires.length;
-      const bloque = badgeageBloque(id, date);
+      const statut = typeAbsence(id, date);   // "absent" | "maladie" | null
+      const absent = !!statut;
+      const aVerif = DB.aVerifier && DB.aVerifier[date] && DB.aVerifier[date][id] && !paires.length && !absent;
+      const bloque = badgeageBloque(id, date) && !absent;
       let reelLabel;
       if (paires.length) {
         reelLabel = paires.map(p=>`${p.in||'—'} → ${p.out||'<span style="color:var(--ink-dim)">en cours</span>'}`).join('<br>');
+      } else if (statut==="maladie") {
+        reelLabel = '<span style="color:#e8556b;font-weight:600">🤒 Arrêt maladie</span>';
+      } else if (statut==="absent") {
+        reelLabel = '<span style="color:#e8556b;font-weight:600">🚫 Absent</span>';
       } else if (aVerif) {
         reelLabel = '<span style="color:#e8556b;font-weight:600">⚠️ Absence à vérifier</span>';
       } else if (bloque) {
@@ -1378,29 +1398,42 @@ const App = {
       } else {
         reelLabel = '<span style="color:var(--ink-dim)">—</span>';
       }
-      // temps travaillé (pauses déduites)
-      const tt = tempsTravailleMin(paires, id, date);
-      const ttLabel = tt>0 ? `${Math.floor(tt/60)}h${String(tt%60).padStart(2,'0')}` : '—';
+      // temps travaillé (pauses déduites) — 0 si absent
+      const tt = absent ? 0 : tempsTravailleMin(paires, id, date);
+      const ttLabel = absent ? '0h00' : (tt>0 ? `${Math.floor(tt/60)}h${String(tt%60).padStart(2,'0')}` : '—');
       // pause repas déduite
       const pauseMin = tempsPauseMin(id, date);
       const enPauseLive = pauseEnCours(id, date);
       let pauseLabel;
-      if (enPauseLive) pauseLabel = '<span style="color:var(--accent)">en cours…</span>';
+      if (absent) pauseLabel = '—';
+      else if (enPauseLive) pauseLabel = '<span style="color:var(--accent)">en cours…</span>';
       else if (pauseMin>0) pauseLabel = `−${pauseMin} min`;
       else pauseLabel = '—';
       // signature : on prend la 1re disponible
       const sig = paires.find(p=>p.inP&&p.inP.signature)?.inP.signature
                 || paires.find(p=>p.outP&&p.outP.signature)?.outP.signature || '';
-      const rowStyle = (aVerif||bloque) ? ' style="background:rgba(232,85,107,.07)"' : '';
+      const rowStyle = absent ? ' style="background:rgba(155,167,196,.08)"' : ((aVerif||bloque) ? ' style="background:rgba(232,85,107,.07)"' : '');
+      // ponctualité : 0 si absent, sinon le solde calculé
+      const soldeAff = absent ? '<span class="badge-delta delta-ok">0</span>' : this.soldeBadge(solde);
+      // boutons d'action
+      let actions;
+      if (absent) {
+        actions = `<button class="btn btn-ghost btn-sm" onclick="App.annulerAbsence('${id}')">Annuler</button>`;
+      } else {
+        const btnMod = `<button class="btn btn-ghost btn-sm" onclick="App.editPointage('${id}')">${(aVerif||bloque)?'Régulariser':'Modifier'}</button>`;
+        const btnAbs = !paires.length ? `<button class="btn btn-ghost btn-sm" style="color:#e8556b" onclick="App.marquerAbsent('${id}')">Absent</button>` : '';
+        const btnMal = !paires.length ? `<button class="btn btn-ghost btn-sm" style="color:#e8556b" onclick="App.marquerMaladie('${id}')">Arrêt maladie</button>` : '';
+        actions = `<div class="row" style="gap:6px;justify-content:flex-end;flex-wrap:wrap">${btnMod}${btnAbs}${btnMal}</div>`;
+      }
       rows += `<tr${rowStyle}>
         <td>${e.nom}<div style="color:var(--ink-soft);font-size:.78rem">${e.role}</div></td>
         <td class="num" style="font-size:.82rem">${prevuLabel}</td>
         <td class="num" style="font-size:.82rem">${reelLabel}</td>
         <td class="num" style="font-size:.82rem">${pauseLabel}</td>
         <td class="num">${ttLabel}</td>
-        <td class="num">${this.soldeBadge(solde)}</td>
+        <td class="num">${soldeAff}</td>
         <td>${sig?`<img class="sig-thumb" src="${sig}">`:''}</td>
-        <td><button class="btn btn-ghost btn-sm" onclick="App.editPointage('${id}')">${(aVerif||bloque)?'Régulariser':'Modifier'}</button></td>
+        <td>${actions}</td>
       </tr>`;
     });
     const estAujourdhui = (date === this.currentDate);
@@ -1422,6 +1455,36 @@ const App = {
       <p style="color:var(--ink-soft);font-size:.82rem;margin-top:12px">« Pause » = temps de pause repas déduit. « Travaillé » = présence réelle moins coupures et pauses. « Ponctualité » = retard/bonus cumulé sur les services prévus.</p>`
       : `<div class="empty"><div class="ico">🗓️</div>Personne n'était prévu ce jour-là.</div>`);
   },
+  /* ----- ABSENCE / ARRÊT MALADIE (gestion) : ponctualité = 0, temps travaillé = 0 ----- */
+  _marquerStatut(empId, type) {
+    const e = emp(empId); if (!e) return;
+    const date = this.jourConsulte || this.currentDate;
+    const libelle = type==="maladie" ? "EN ARRÊT MALADIE" : "ABSENT";
+    if (pairesJour(empId, date).length) { toast("Des pointages existent déjà pour ce jour.", "err"); return; }
+    if (!confirm(`Marquer ${e.nom} ${libelle} le ${frDate(date)} ? Ponctualité et temps travaillé seront à 0.`)) return;
+    if (!DB.absences[date]) DB.absences[date] = {};
+    DB.absences[date][empId] = { type, by: emp(this.session.empId).nom, ts: Date.now() };
+    // un statut confirmé lève l'alerte "à vérifier"
+    if (DB.aVerifier[date] && DB.aVerifier[date][empId]) delete DB.aVerifier[date][empId];
+    saveDB();
+    logAction(emp(this.session.empId).nom, type==="maladie"?"Arrêt maladie":"Absence",
+      `${e.nom} marqué ${type==="maladie"?"en arrêt maladie":"absent"} le ${date} (ponctualité 0, temps 0)`);
+    toast(`${e.nom} marqué ${type==="maladie"?"en arrêt maladie":"absent"}.`, "ok");
+    this.renderAdminPanel();
+  },
+  marquerAbsent(empId) { this._marquerStatut(empId, "absent"); },
+  marquerMaladie(empId) { this._marquerStatut(empId, "maladie"); },
+  annulerAbsence(empId) {
+    const e = emp(empId); if (!e) return;
+    const date = this.jourConsulte || this.currentDate;
+    const type = (DB.absences[date] && DB.absences[date][empId] && DB.absences[date][empId].type) || "absent";
+    if (DB.absences[date]) delete DB.absences[date][empId];
+    saveDB();
+    logAction(emp(this.session.empId).nom, type==="maladie"?"Arrêt maladie annulé":"Absence annulée", `${e.nom} — ${date}`);
+    toast(`Statut de ${e.nom} annulé.`, "ok");
+    this.renderAdminPanel();
+  },
+
   soldeBadge(solde) {
     if (solde===null) return '<span class="badge-delta delta-ok">—</span>';
     if (solde===0)    return '<span class="badge-delta delta-ok">à l’heure</span>';
@@ -2111,6 +2174,7 @@ const App = {
     DB.security=DB.security||{failCount:0,locked:false,lockedAt:null};
     DB.settings=DB.settings||{emailjs:{serviceId:"",templateId:"",publicKey:""},alertEmail:"",maxTries:3};
     DB.aVerifier=DB.aVerifier||{};
+    DB.absences=DB.absences||{};
     saveDB();
     logAction("Système", "Restauration sauvegarde", `Fichier : ${pending.name}`);
     this._restaurePending = null;
@@ -2130,14 +2194,25 @@ const App = {
   },
   exportPointages() {
     let csv = "Date;Salarié;Rôle;Service n°;Prévu début;Prévu fin;Arrivée réelle;Départ réel;Pause repas (min);Temps travaillé jour;Ponctualité jour (min);Modifié par\n";
-    const dates = [...new Set(DB.pointages.map(p=>p.date))].sort().filter(d=>this._dansPlage(d));
+    const dates = [...new Set([...DB.pointages.map(p=>p.date), ...Object.keys(DB.absences||{})])].sort().filter(d=>this._dansPlage(d));
     let nbLignes = 0;
     dates.forEach(d=>{
       prevusDuJour(d).concat([...new Set(DB.pointages.filter(p=>p.date===d).map(p=>p.empId))])
         .filter((v,i,a)=>a.indexOf(v)===i).forEach(id=>{
         const e = emp(id); if(!e) return;
         const paires = pairesJour(id, d);
-        if(!paires.length) return;
+        if(!paires.length){
+          // salarié marqué absent / en arrêt maladie : ligne explicite, ponctualité 0, temps 0
+          if (estAbsent(id, d)) {
+            const prevuA = getPrevu(id, d);
+            const crA = prevuA && prevuA.creneaux ? prevuA.creneaux[0] : null;
+            const info = DB.absences[d] && DB.absences[d][id] ? DB.absences[d][id] : {};
+            const lib = (info.type==="maladie") ? "ARRÊT MALADIE" : "ABSENT";
+            csv += `${d};${e.nom};${e.role};;${crA?crA.debut:''};${crA?crA.fin:''};${lib};${lib};;0h00;0;${info.by||''}\n`;
+            nbLignes++;
+          }
+          return;
+        }
         const prevu = getPrevu(id, d);
         const solde = calcSoldeJour(prevu, paires);
         const tt = tempsTravailleMin(paires, id, d);
