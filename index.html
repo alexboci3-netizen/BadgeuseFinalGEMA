@@ -207,6 +207,10 @@
   th, td { padding:12px 14px; text-align:left; border-bottom:1px solid var(--line); }
   th { background:var(--bg-soft); color:var(--ink-soft); font-weight:600; font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; }
   tr:last-child td { border-bottom:none; }
+  /* Journal : fenêtre déroulante à hauteur fixe, en-tête figé, lignes compactes */
+  .journal-scroll { max-height:min(78vh,1180px); overflow:auto; }
+  .journal-scroll thead th { position:sticky; top:0; z-index:2; }
+  .journal-scroll td { padding:8px 13px; font-size:.82rem; }
   td.num { font-variant-numeric:tabular-nums; text-align:right; }
   .badge-delta { padding:3px 9px; border-radius:7px; font-weight:600; font-variant-numeric:tabular-nums; }
   .delta-ok { background:rgba(155,167,196,.16); color:var(--ink-soft); }
@@ -2005,14 +2009,39 @@ const App = {
 
   /* ----- onglet JOURNAL ----- */
   tabJournal(c) {
-    const j = DB.journal.slice(0,200);
-    c.innerHTML = j.length ? `<div class="table-card"><table>
-      <thead><tr><th>Date / heure</th><th>Qui</th><th>Action</th><th>Détail</th></tr></thead>
-      <tbody>${j.map(x=>`<tr>
-        <td class="num">${new Date(x.ts).toLocaleString("fr-FR")}</td>
-        <td>${x.who}</td><td>${x.action}</td><td style="color:var(--ink-soft)">${x.detail||''}</td>
-      </tr>`).join("")}</tbody></table></div>`
-      : `<div class="empty"><div class="ico">📝</div>Aucune action enregistrée pour le moment.</div>`;
+    const j = DB.journal.slice(0,300);
+    if (!j.length) { c.innerHTML = `<div class="empty"><div class="ico">📝</div>Aucune action enregistrée pour le moment.</div>`; return; }
+    c.innerHTML = `
+      <div class="row mb" style="align-items:center;gap:12px;flex-wrap:wrap">
+        <input type="text" id="journalFilter" placeholder="🔎 Filtrer (nom, action, détail, date)…"
+          oninput="App.filtrerJournal(this.value)"
+          style="flex:1;min-width:220px;padding:10px 14px;border-radius:11px;background:var(--bg-soft);border:1px solid var(--line);color:var(--ink);font-size:.9rem">
+        <span style="color:var(--ink-soft);font-size:.8rem">${DB.journal.length} entrée(s)${DB.journal.length>300?` — 300 plus récentes affichées`:''}</span>
+      </div>
+      <div class="table-card journal-scroll" style="overflow:auto">
+        <table>
+          <thead><tr><th>Date / heure</th><th>Qui</th><th>Action</th><th>Détail</th></tr></thead>
+          <tbody id="journalBody">${j.map(x=>`<tr>
+            <td class="num">${new Date(x.ts).toLocaleString("fr-FR")}</td>
+            <td>${x.who}</td><td>${x.action}</td><td style="color:var(--ink-soft)">${x.detail||''}</td>
+          </tr>`).join("")}</tbody>
+        </table>
+      </div>
+      <div id="journalVide" style="display:none;color:var(--ink-soft);text-align:center;padding:18px;font-size:.88rem">Aucune entrée ne correspond au filtre.</div>`;
+  },
+  /* Filtre instantané du journal (sans re-render, pour garder le focus) */
+  filtrerJournal(val) {
+    const q = (val||"").toLowerCase().trim();
+    const body = document.getElementById("journalBody");
+    if (!body) return;
+    let visibles = 0;
+    [...body.rows].forEach(r=>{
+      const match = !q || r.textContent.toLowerCase().includes(q);
+      r.style.display = match ? "" : "none";
+      if (match) visibles++;
+    });
+    const vide = document.getElementById("journalVide");
+    if (vide) vide.style.display = visibles ? "none" : "block";
   },
 
   /* ----- onglet EXPORT ----- */
