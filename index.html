@@ -899,7 +899,7 @@ const App = {
 
     let cards = "";
     prevus.forEach(id=>{
-      const e = emp(id); if (!e) return;
+      const e = emp(id); if (!e || e.archived) return;
       const st = statutJour(id, date);
       const paires = pairesJour(id, date);
       const isRenfort = DB.renforts[date] && DB.renforts[date][id];
@@ -1799,8 +1799,9 @@ const App = {
   tabPins(c) {
     const isDir = this.session.access==="dirigeant";
     const moiId = this.session.empId;
-    // salariés + manager + dirigeant
-    const rows = DB.team.map(e=>{
+    const actifs = DB.team.filter(e=>!e.archived);
+    const archives = DB.team.filter(e=>e.archived);
+    const rows = actifs.map(e=>{
       // Qui peut modifier qui ?
       // - Dirigeant : tout le monde
       // - Manager : les salariés uniquement (pas lui-même, pas le dirigeant)
@@ -1812,15 +1813,15 @@ const App = {
         else if (e.access==="dirigeant") { raison = "réservé au Dirigeant"; }
         else { canEdit = true; }
       }
-      // suppression : dirigeant -> tous sauf lui-même ; manager -> salariés uniquement (pas lui)
-      const canDelete = isDir ? (e.id!==moiId) : (e.access==="salarie" && e.id!==moiId);
+      // archivage : dirigeant -> tous sauf lui-même ; manager -> salariés uniquement (pas lui)
+      const canArchive = isDir ? (e.id!==moiId) : (e.access==="salarie" && e.id!==moiId);
       const btnPin = canEdit
         ? `<button class="btn btn-ghost btn-sm" onclick="App.changePin('${e.id}')">Changer le PIN</button>`
         : `<span style="color:var(--ink-dim);font-size:.82rem">${raison}</span>`;
       const btnVoir = isDir
         ? `<button class="btn btn-ghost btn-sm" onclick="App.revealPin('${e.id}')">👁 Voir</button>` : "";
-      const btnDel = canDelete
-        ? `<button class="btn btn-ghost btn-sm" style="color:#e8556b" onclick="App.deleteEmp('${e.id}')">Supprimer</button>` : "";
+      const btnArch = canArchive
+        ? `<button class="btn btn-ghost btn-sm" style="color:#e8556b" onclick="App.archiverEmp('${e.id}')">Archiver</button>` : "";
       // changement de niveau d'accès : réservé au Dirigeant
       const btnAcces = isDir
         ? `<button class="btn btn-ghost btn-sm" onclick="App.changeAccess('${e.id}')">Rôle d'accès</button>` : "";
@@ -1832,9 +1833,26 @@ const App = {
       return `<tr>
         <td>${e.nom}${tagAcces}<div style="color:var(--ink-soft);font-size:.78rem">${e.role}</div></td>
         <td class="num" style="letter-spacing:.3em">••••</td>
-        <td><div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${btnPin}${btnVoir}${btnAcces}${btnDel}</div></td>
+        <td><div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${btnPin}${btnVoir}${btnAcces}${btnArch}</div></td>
       </tr>`;
     }).join("");
+    // Section des salariés archivés
+    let blocArchives = "";
+    if (archives.length) {
+      const ar = archives.map(e=>`<tr style="opacity:.7">
+        <td>${e.nom}<div style="color:var(--ink-soft);font-size:.78rem">${e.role} · archivé</div></td>
+        <td><div class="row" style="gap:6px;justify-content:flex-end">
+          <button class="btn btn-ghost btn-sm" onclick="App.reactiverEmp('${e.id}')">Réactiver</button>
+        </div></td>
+      </tr>`).join("");
+      blocArchives = `
+        <h3 style="font-size:1rem;margin:24px 0 8px;color:var(--ink-soft)">📦 Salariés archivés (${archives.length})</h3>
+        <p style="color:var(--ink-dim);font-size:.82rem;margin:0 0 10px">Retirés de la pointeuse et des plannings à venir. Leur historique et leurs pointages restent visibles dans les récaps et exports. Réactivables à tout moment.</p>
+        <div class="table-card"><table>
+          <thead><tr><th>Salarié</th><th></th></tr></thead>
+          <tbody>${ar}</tbody>
+        </table></div>`;
+    }
     c.innerHTML = `
       <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap">
         <p style="color:var(--ink-soft);font-size:.9rem;margin:0;flex:1;min-width:200px">
@@ -1844,7 +1862,8 @@ const App = {
       <div class="table-card"><table>
         <thead><tr><th>Salarié</th><th>Code</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
-      </table></div>`;
+      </table></div>
+      ${blocArchives}`;
   },
   addEmp() {
     const isDir = this.session.access==="dirigeant";
@@ -1930,34 +1949,56 @@ const App = {
     toast(`${e.nom} est maintenant ${level==="salarie"?"salarié":level}.`, "ok");
     this.renderAdminPanel();
   },
-  deleteEmp(empId) {
+  /* Le salarié a-t-il déjà pointé aujourd'hui (journée en cours à ne pas couper) ? */
+  _activiteAujourdhui(empId) {
+    const d = this.currentDate;
+    const aPointe = DB.pointages.some(p=>p.empId===empId && p.date===d);
+    return { aPointe, actif: aPointe };
+  },
+  archiverEmp(empId) {
     const e = emp(empId); if (!e) return;
     const isDir = this.session.access==="dirigeant";
-    if (empId===this.session.empId) { toast("Vous ne pouvez pas vous supprimer vous-même.", "err"); return; }
-    if (!isDir && e.access!=="salarie") { toast("Seul le Dirigeant peut supprimer ce profil.", "err"); return; }
+    if (empId===this.session.empId) { toast("Vous ne pouvez pas vous archiver vous-même.", "err"); return; }
+    if (!isDir && e.access!=="salarie") { toast("Action réservée au Dirigeant.", "err"); return; }
+    // GARDE-FOU : pas d'archivage si la personne a déjà pointé aujourd'hui (journée en cours)
+    if (this._activiteAujourdhui(empId).actif) {
+      toast(`${e.nom} a déjà pointé aujourd'hui. Archivez-le après sa journée.`, "err");
+      return;
+    }
     openModal(`
       <button class="modal-close" onclick="closeModal()">×</button>
-      <h3>Supprimer ${e.nom} ?</h3>
-      <div class="modal-sub">Le salarié et ses horaires prévus seront retirés. Les pointages déjà enregistrés sont conservés dans l'historique. Cette action est définitive.</div>
+      <h3>Archiver ${e.nom} ?</h3>
+      <div class="modal-sub">Le salarié sort de la pointeuse et des plannings à venir. Ses <b>pointages et son historique sont conservés</b> et restent visibles dans les récaps et les exports. Vous pourrez le <b>réactiver</b> à tout moment.</div>
       <div class="row mt">
         <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
-        <button class="btn btn-primary" style="background:#e8556b" onclick="App.confirmDeleteEmp('${empId}')">Supprimer définitivement</button>
+        <button class="btn btn-primary" onclick="App.confirmArchiverEmp('${empId}')">Archiver</button>
       </div>`);
   },
-  confirmDeleteEmp(empId) {
+  confirmArchiverEmp(empId) {
     const e = emp(empId); if (!e) { closeModal(); return; }
     const isDir = this.session.access==="dirigeant";
     if (empId===this.session.empId) { toast("Action impossible.", "err"); return; }
     if (!isDir && e.access!=="salarie") { toast("Action réservée au Dirigeant.", "err"); return; }
-    const nom = e.nom;
-    DB.team = DB.team.filter(t=>t.id!==empId);
-    // retirer ses horaires prévus (planning + renforts), garder les pointages historiques
-    Object.keys(DB.planning||{}).forEach(d=>{ if (DB.planning[d]) delete DB.planning[d][empId]; });
-    Object.keys(DB.renforts||{}).forEach(d=>{ if (DB.renforts[d]) delete DB.renforts[d][empId]; });
+    // re-vérifier le garde-fou (sécurité)
+    if (this._activiteAujourdhui(empId).actif) { toast("Action impossible : activité aujourd'hui.", "err"); return; }
+    e.archived = true; e.archivedAt = Date.now(); e.archivedBy = emp(this.session.empId).nom;
+    // retirer les créneaux À VENIR (aujourd'hui inclus), garder l'historique passé et les pointages
+    const d0 = this.currentDate;
+    Object.keys(DB.planning||{}).forEach(d=>{ if (d>=d0 && DB.planning[d]) delete DB.planning[d][empId]; });
+    Object.keys(DB.renforts||{}).forEach(d=>{ if (d>=d0 && DB.renforts[d]) delete DB.renforts[d][empId]; });
     saveDB();
-    logAction(emp(this.session.empId).nom, "Suppression salarié", `${nom} supprimé de l'équipe`);
+    logAction(emp(this.session.empId).nom, "Salarié archivé", `${e.nom} archivé (historique et pointages conservés)`);
     closeModal();
-    toast(`${nom} supprimé.`, "ok");
+    toast(`${e.nom} archivé.`, "ok");
+    this.renderAdminPanel();
+  },
+  reactiverEmp(empId) {
+    const e = emp(empId); if (!e) return;
+    if (this.session.access!=="dirigeant" && e.access!=="salarie") { toast("Action réservée au Dirigeant.", "err"); return; }
+    e.archived = false; delete e.archivedAt; delete e.archivedBy;
+    saveDB();
+    logAction(emp(this.session.empId).nom, "Salarié réactivé", `${e.nom} réactivé`);
+    toast(`${e.nom} réactivé. Réimportez le planning pour lui réattribuer des créneaux.`, "ok");
     this.renderAdminPanel();
   },
   revealPin(empId) {
@@ -2624,7 +2665,7 @@ async function parseXlsxPlanning(arrayBuffer) {
 
   // map nom -> empId de notre équipe
   function matchEmp(nom) {
-    const e = DB.team.find(t=>t.nom.toLowerCase()===String(nom).toLowerCase().trim());
+    const e = DB.team.find(t=>t.nom.toLowerCase()===String(nom).toLowerCase().trim() && !t.archived);
     return e?e.id:null;
   }
 
