@@ -211,6 +211,11 @@
   .journal-scroll { max-height:min(78vh,1180px); overflow:auto; }
   .journal-scroll thead th { position:sticky; top:0; z-index:2; }
   .journal-scroll td { padding:8px 13px; font-size:.82rem; }
+  /* En-têtes de pôle (Salle / Cuisine) sur l'écran de pointage */
+  .pole-header { display:flex; align-items:center; gap:10px; margin:22px 0 12px; font-size:1.15rem; }
+  .pole-header h3 { margin:0; font-weight:700; }
+  .pole-count { margin-left:2px; background:var(--bg-soft); color:var(--ink-soft); border-radius:20px; padding:2px 11px; font-size:.8rem; font-weight:600; }
+  .pole-empty { color:var(--ink-dim); font-size:.9rem; padding:6px 2px 4px; }
   td.num { font-variant-numeric:tabular-nums; text-align:right; }
   .badge-delta { padding:3px 9px; border-radius:7px; font-weight:600; font-variant-numeric:tabular-nums; }
   .delta-ok { background:rgba(155,167,196,.16); color:var(--ink-soft); }
@@ -351,6 +356,18 @@ function accesDepuisPoste(poste) {
   if (/manager|responsable|g[ée]rant|directeur|direction/.test(p)) return "manager";
   return "salarie";
 }
+/* Secteur (salle / cuisine) déduit du poste — conservateur : seul un poste clairement
+   "cuisine" bascule en cuisine ; le reste reste en salle (corrigeable à la main). */
+function secteurDepuisPoste(poste) {
+  const p = String(poste || "").toLowerCase();
+  if (/cuisin|plong|p[âa]tiss|pizza|boulang|grillard|chef de partie|second de cuisine|sous.?chef|commis de cuisine/.test(p)) return "cuisine";
+  return "salle";
+}
+/* Secteur effectif d'un salarié : champ explicite sinon déduit du poste */
+function secteurDe(e) {
+  if (!e) return "salle";
+  return e.secteur === "cuisine" || e.secteur === "salle" ? e.secteur : secteurDepuisPoste(e.role);
+}
 /* Renvoie le prochain code PIN à 4 chiffres libre (évite 0000 et les codes déjà pris) */
 function genererPin(used) {
   for (let n = 1000; n <= 9998; n++) {
@@ -375,6 +392,7 @@ function ajouterSalaries(personnel) {
     const access = accesDepuisPoste(p && p.poste);
     const pin = genererPin(used); used.add(pin);
     const id = "e_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    // pas de secteur figé : il se déduit du poste (secteurDe), sauf override manuel
     DB.team.push({ id, nom, role, pin, access });
     crees.push({ id, nom, pin, role, access });
   });
@@ -897,9 +915,31 @@ const App = {
       banner = `<div class="day-banner">📋 <span><b>${prevus.length}</b> salarié(s) prévu(s) aujourd'hui. Touchez votre carte pour pointer.</span></div>`;
     }
 
-    let cards = "";
+    const groupes = { salle: [], cuisine: [] };
     prevus.forEach(id=>{
       const e = emp(id); if (!e || e.archived) return;
+      const carte = this._carteBadge(id, date);
+      if (!carte) return;
+      groupes[secteurDe(e)==="cuisine" ? "cuisine" : "salle"].push(carte);
+    });
+
+    const section = (titre, icone, arr, vide) => `
+      <div class="pole-header">${icone}<h3>${titre}</h3><span class="pole-count">${arr.length}</span></div>
+      ${arr.length ? `<div class="grid">${arr.join("")}</div>` : `<div class="pole-empty">${vide}</div>`}`;
+
+    const corps = prevus.length === 0 ? `<div class="grid"></div>`
+      : section("Salle", "🍽️", groupes.salle, "Personne en salle aujourd'hui.")
+        + section("Cuisine", "👨‍🍳", groupes.cuisine, "Personne en cuisine aujourd'hui.");
+
+    el.innerHTML = `
+      <div class="section-title"><h2 class="display">Pointage du jour</h2></div>
+      ${banner}
+      ${corps}`;
+  },
+
+  /* Construit la carte de badgeage d'un salarié (ou "" si à ignorer) */
+  _carteBadge(id, date) {
+      const e = emp(id); if (!e || e.archived) return "";
       const st = statutJour(id, date);
       const paires = pairesJour(id, date);
       const isRenfort = DB.renforts[date] && DB.renforts[date][id];
@@ -912,7 +952,6 @@ const App = {
       if (bloque){ stLabel="⛔ Non pointé — voir gestion"; stClass="st-done"; }
       else if (st==="await"){ stLabel="À pointer"; stClass="st-await"; }
       else if (enPause){
-        // calcul du temps de pause écoulé (live)
         const ecoule = Math.max(0, Math.round((Date.now()-enPause.debutP.ts)/60000));
         const depasse = ecoule >= PAUSE_REPAS_MIN;
         stLabel = `🍽️ En pause — ${ecoule} min`; stClass = depasse ? "st-pause-over" : "st-pause";
@@ -924,11 +963,10 @@ const App = {
       else if (st==="pause"){
         stLabel=`Pause — service suivant à pointer`; stClass="st-await";
       }
-      else { // done : récap des créneaux
+      else {
         const segs = paires.filter(p=>p.in&&p.out).map(p=>`${p.in}→${p.out}`).join("  ·  ");
         stLabel = segs || "Terminé"; stClass="st-done";
       }
-      // bouton pause repas : visible si en service (pas manager, pas bloqué, pas en pause), ou bouton "fin de pause" si en pause
       let pauseBtn = "";
       if (!isMgr && !bloque) {
         if (enPause) {
@@ -938,7 +976,7 @@ const App = {
         }
       }
       const cardCls = enPause ? (stClass==="st-pause-over"?"emp-card pause-over":"emp-card pause-on") : "emp-card";
-      cards += `
+      return `
         <button class="${cardCls}${bloque?' card-locked':''}" onclick="App.startBadge('${id}')"${bloque?' style="opacity:.55"':''}>
           ${isRenfort?'<span class="renfort-tag">Renfort</span>':''}
           ${isExtra?'<span class="renfort-tag" style="background:var(--blue)">Extra</span>':''}
@@ -947,12 +985,6 @@ const App = {
           <div class="status ${stClass}">${stLabel}</div>
           ${pauseBtn}
         </button>`;
-    });
-
-    el.innerHTML = `
-      <div class="section-title"><h2 class="display">Pointage du jour</h2></div>
-      ${banner}
-      <div class="grid">${cards||""}</div>`;
   },
 
   /* ---------- DÉMARRER UN BADGEAGE ---------- */
@@ -1830,10 +1862,16 @@ const App = {
         : e.access==="manager"
           ? `<span class="badge-delta" style="background:rgba(240,168,48,.18);color:var(--accent);margin-left:6px">Manager</span>`
           : "";
+      // secteur (salle / cuisine) : modifiable par le manager et le dirigeant (pas pour un dirigeant)
+      const sect = secteurDe(e);
+      const tagSect = `<span class="badge-delta" style="background:rgba(155,167,196,.16);color:var(--ink-soft);margin-left:6px">${sect==="cuisine"?"👨‍🍳 Cuisine":"🍽️ Salle"}</span>`;
+      const canSect = isDir || e.access!=="dirigeant";
+      const btnSect = canSect
+        ? `<button class="btn btn-ghost btn-sm" onclick="App.changeSecteur('${e.id}')">Secteur</button>` : "";
       return `<tr>
-        <td>${e.nom}${tagAcces}<div style="color:var(--ink-soft);font-size:.78rem">${e.role}</div></td>
+        <td>${e.nom}${tagAcces}${tagSect}<div style="color:var(--ink-soft);font-size:.78rem">${e.role}</div></td>
         <td class="num" style="letter-spacing:.3em">••••</td>
-        <td><div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${btnPin}${btnVoir}${btnAcces}${btnArch}</div></td>
+        <td><div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${btnPin}${btnVoir}${btnSect}${btnAcces}${btnArch}</div></td>
       </tr>`;
     }).join("");
     // Section des salariés archivés
@@ -1881,6 +1919,11 @@ const App = {
         <input type="text" id="neNom" placeholder="Ex. : Léa Fontaine"></label>
       <label class="field"><span>Rôle / poste (facultatif)</span>
         <input type="text" id="neRole" placeholder="Ex. : Serveuse, Chef de rang…"></label>
+      <label class="field"><span>Secteur</span>
+        <select id="neSecteur">
+          <option value="salle">🍽️ Salle</option>
+          <option value="cuisine">👨‍🍳 Cuisine</option>
+        </select></label>
       ${selAcces}
       <label class="field"><span>Code PIN (4 chiffres, facultatif)</span>
         <input type="text" id="nePin" inputmode="numeric" maxlength="4" placeholder="auto" style="letter-spacing:.3em;text-align:center"></label>
@@ -1908,7 +1951,9 @@ const App = {
       pin = genererPin(used);
     }
     const id = "e_" + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
-    DB.team.push({ id, nom, role, pin, access });
+    const secEl = document.getElementById("neSecteur");
+    const secteur = (secEl && secEl.value==="cuisine") ? "cuisine" : "salle";
+    DB.team.push({ id, nom, role, pin, access, secteur });
     saveDB();
     logAction(emp(this.session.empId).nom, "Ajout salarié", `${nom} créé (PIN ${pin})${access!=="salarie"?` — accès ${access}`:""}`);
     closeModal();
@@ -1949,7 +1994,32 @@ const App = {
     toast(`${e.nom} est maintenant ${level==="salarie"?"salarié":level}.`, "ok");
     this.renderAdminPanel();
   },
-  /* Le salarié a-t-il déjà pointé aujourd'hui (journée en cours à ne pas couper) ? */
+  /* Changer le secteur (salle / cuisine) — manager ou dirigeant */
+  changeSecteur(empId) {
+    const e = emp(empId); if (!e) return;
+    if (this.session.access!=="dirigeant" && e.access==="dirigeant") { toast("Action réservée au Dirigeant.", "err"); return; }
+    const cur = secteurDe(e);
+    const opt = (val,lib) => `<button class="btn ${cur===val?'btn-primary':'btn-ghost'} btn-block" style="margin-bottom:8px"
+        onclick="App.saveSecteur('${empId}','${val}')">${lib}</button>`;
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>Secteur — ${e.nom}</h3>
+      <div class="modal-sub">Détermine la section où la carte de pointage apparaît.</div>
+      ${opt("salle","🍽️ Salle")}
+      ${opt("cuisine","👨‍🍳 Cuisine")}
+      <button class="btn btn-ghost btn-block mt" onclick="closeModal()">Annuler</button>`);
+  },
+  saveSecteur(empId, secteur) {
+    const e = DB.team.find(t=>t.id===empId); if (!e) { closeModal(); return; }
+    if (this.session.access!=="dirigeant" && e.access==="dirigeant") { toast("Action réservée au Dirigeant.", "err"); return; }
+    if (!["salle","cuisine"].includes(secteur)) { closeModal(); return; }
+    e.secteur = secteur;
+    saveDB();
+    logAction(emp(this.session.empId).nom, "Changement de secteur", `${e.nom} → ${secteur}`);
+    closeModal();
+    toast(`${e.nom} : secteur ${secteur}.`, "ok");
+    this.renderAdminPanel();
+  },
   _activiteAujourdhui(empId) {
     const d = this.currentDate;
     const aPointe = DB.pointages.some(p=>p.empId===empId && p.date===d);
@@ -2481,20 +2551,102 @@ const App = {
       const changes = tousChanges.filter(c => c.oldLabel !== "(rien)");
       const nbInco = Object.keys(inconnues||{}).length;
       const totInco = Object.values(inconnues||{}).reduce((a,b)=>a+b,0);
+      // détection des CHANGEMENTS DE POSTE pour les salariés existants (Fiche Personnel)
+      const changementsPoste = [];
+      (personnel||[]).forEach(p=>{
+        const nom = String(p && p.nom || "").trim();
+        const np = String(p && p.poste || "").trim();
+        if (!nom || !np) return;
+        const ex = DB.team.find(t=>t.nom.toLowerCase().trim()===nom.toLowerCase() && !t.archived);
+        if (ex && np !== (ex.role||"").trim()) {
+          changementsPoste.push({ empId: ex.id, nom: ex.nom, ancien: ex.role||"—", nouveau: np });
+        }
+      });
       // import en attente (utilisé par les boutons des popups de confirmation)
-      this.pendingImport = { fusion, changes, meta: { name:f.name, gel, conflits, appliques, nbInco, totInco } };
-      const seuil = (DB.settings && DB.settings.seuilConflits) || 5;
-      const estDirection = !this.session || this.session.access==="dirigeant";
-      if (changes.length === 0) {
-        this.finaliserImport("");                       // aucun conflit : on applique direct
-      } else if (estDirection) {
-        this.confirmerImportDirection();                // Direction : commentaire + validation, sans liste ni seuil
+      this.pendingImport = { fusion, changes, changementsPoste, meta: { name:f.name, gel, conflits, appliques, nbInco, totInco } };
+      // 1) D'abord les changements de poste (s'il y en a), puis le flux des conflits de planning
+      if (changementsPoste.length) {
+        this.confirmerChangementsPoste();
       } else {
-        this.confirmerImportManager(changes.length > seuil); // Manager : commentaire + validation ; liste si > seuil
+        this._dispatchConflits();
       }
     } catch(e) {
       console.error(e); toast("Impossible de lire ce fichier : "+e.message, "err");
     }
+  },
+  /* Aiguillage des conflits de planning (après l'étape éventuelle des postes) */
+  _dispatchConflits() {
+    const changes = (this.pendingImport && this.pendingImport.changes) || [];
+    const seuil = (DB.settings && DB.settings.seuilConflits) || 5;
+    const estDirection = !this.session || this.session.access==="dirigeant";
+    if (changes.length === 0) {
+      this.finaliserImport("");
+    } else if (estDirection) {
+      this.confirmerImportDirection();
+    } else {
+      this.confirmerImportManager(changes.length > seuil);
+    }
+  },
+  /* Étape POSTES : changements de poste détectés -> confirmation en un lot, ou conservation */
+  confirmerChangementsPoste() {
+    const cp = (this.pendingImport && this.pendingImport.changementsPoste) || [];
+    const estManager = this.session && this.session.access==="manager";
+    const moiId = this.session && this.session.empId;
+    const liste = cp.map(c=>{
+      const self = estManager && c.empId===moiId;
+      return `<tr${self?' style="opacity:.55"':''}><td>${c.nom}${self?' <span style="color:var(--ink-dim);font-size:.74rem">(vous — réservé au Dirigeant)</span>':''}</td>
+        <td style="color:var(--ink-soft)">${c.ancien} → ${self?`<span style="color:var(--ink-dim)">${c.nouveau}</span>`:`<b style="color:var(--accent)">${c.nouveau}</b>`}</td></tr>`;
+    }).join("");
+    const noteSelf = (estManager && cp.some(c=>c.empId===moiId))
+      ? `<div class="modal-sub" style="color:var(--ink-dim)">Votre propre poste ne sera pas modifié (réservé au Dirigeant) ; les autres seront appliqués.</div>` : "";
+    openModal(`
+      <button class="modal-close" onclick="App.annulerImport()">×</button>
+      <h3>Changement de poste — ${cp.length}</h3>
+      <div class="modal-sub">Le fichier indique de nouveaux postes pour ces salariés (le secteur Salle/Cuisine suit le poste, sauf s'il a été fixé à la main). Vous pouvez <b>appliquer les nouveaux postes</b> (commentaire requis) ou <b>garder les postes actuels</b> et n'importer que le planning.</div>
+      ${noteSelf}
+      <div class="table-card mb" style="max-height:220px;overflow:auto"><table>
+        <thead><tr><th>Salarié</th><th>Poste</th></tr></thead>
+        <tbody>${liste}</tbody></table></div>
+      <label class="field"><span>Motif (si vous appliquez les nouveaux postes)</span>
+        <textarea id="postesMotif" placeholder="Ex. : changement d'affectation validé"></textarea></label>
+      <div class="row mt" style="flex-wrap:wrap;gap:8px">
+        <button class="btn btn-ghost" onclick="App.ignorerPostes()">Garder les postes actuels</button>
+        <button class="btn btn-primary" onclick="App.appliquerPostes()">Appliquer les nouveaux postes</button>
+      </div>`);
+  },
+  appliquerPostes() {
+    const motif = (document.getElementById("postesMotif").value||"").trim();
+    if (!motif) { toast("Commentaire obligatoire pour appliquer les nouveaux postes.", "err"); return; }
+    const estManager = this.session && this.session.access==="manager";
+    const moiId = this.session && this.session.empId;
+    const cp = (this.pendingImport && this.pendingImport.changementsPoste) || [];
+    const appliques = [], refusesSelf = [];
+    cp.forEach(c=>{
+      // un manager ne peut pas changer son PROPRE poste (réservé au Dirigeant)
+      if (estManager && c.empId===moiId) { refusesSelf.push(c); return; }
+      const e = DB.team.find(t=>t.id===c.empId); if (e) { e.role = c.nouveau; appliques.push(c); }
+    });
+    saveDB();
+    const who = this.session ? emp(this.session.empId).nom : "(import)";
+    if (appliques.length) {
+      logAction(who, "Changement de poste (import)",
+        `${appliques.length} poste(s) modifié(s). Motif : ${motif}. Détail : ${appliques.map(c=>`${c.nom} : ${c.ancien}→${c.nouveau}`).join(" ; ")}`);
+    }
+    if (refusesSelf.length) {
+      toast("Votre propre poste n'a pas été modifié (réservé au Dirigeant).", "ok");
+      logAction(who, "Poste non modifié", `${who} : changement de son propre poste ignoré (réservé au Dirigeant)`);
+    }
+    this.pendingImport.changementsPoste = [];
+    closeModal();
+    this._dispatchConflits();
+  },
+  ignorerPostes() {
+    const cp = (this.pendingImport && this.pendingImport.changementsPoste) || [];
+    const who = this.session ? emp(this.session.empId).nom : "(import)";
+    logAction(who, "Postes conservés (import)", `${cp.length} changement(s) de poste ignoré(s) — postes actuels conservés`);
+    this.pendingImport.changementsPoste = [];
+    closeModal();
+    this._dispatchConflits();
   },
   /* Récap HTML de la liste des conflits, pour les popups */
   _detailChangesHTML() {
