@@ -476,6 +476,9 @@ function loadDB() {
   DB.security   = DB.security || { failCount:0, locked:false, lockedAt:null };
   DB.aVerifier  = DB.aVerifier || {};
   DB.absences   = DB.absences || {};
+  DB.pauseRepas = DB.pauseRepas || {};
+  DB.pauseAuto  = DB.pauseAuto || {};
+  DB.commentaires = DB.commentaires || {};
   DB.settings   = DB.settings || { emailjs:{ serviceId:"", templateId:"", publicKey:"" }, alertEmail:"", maxTries:3 };
   if (!DB.settings.emailjs) DB.settings.emailjs = { serviceId:"", templateId:"", publicKey:"" };
   if (!DB.settings.maxTries) DB.settings.maxTries = 3;
@@ -629,19 +632,51 @@ function finServiceEnCours(empId, dateISO) {
   return prevu.creneaux[idxOuvert].fin;
 }
 
-/* Durée réelle travaillée (minutes) = présence − pauses repas */
+/* Pause repas : le service d'indice idx est-il marqué "travaillé" (30 min comptées comme travaillées) ? */
+function pauseTravaillee(empId, dateISO, idx) {
+  const a = DB.pauseRepas && DB.pauseRepas[dateISO] && DB.pauseRepas[dateISO][empId];
+  if (a && typeof a[idx] === "boolean") return a[idx];   // annotation explicite du jour : prioritaire
+  return pauseAutoActif(empId, dateISO);                 // sinon : réglage durable "ne prend pas ses pauses"
+}
+/* Réglage durable "ne prend pas ses pauses" : la date est-elle couverte par une période active ? */
+function pauseAutoActif(empId, dateISO) {
+  const periods = DB.pauseAuto && DB.pauseAuto[empId];
+  if (!periods || !periods.length) return false;
+  return periods.some(p => dateISO >= p.from && (p.to === null || dateISO < p.to));
+}
+/* Le réglage durable est-il actif en ce moment (dernière période ouverte) ? */
+function pauseAutoActifMaintenant(empId) {
+  const periods = DB.pauseAuto && DB.pauseAuto[empId];
+  return !!(periods && periods.length && periods[periods.length-1].to === null);
+}
+/* Durée réelle travaillée (minutes) = présence − forfait pause repas (30 min par service,
+   SAUF pour les services marqués "travaillés" par le manager/la direction). */
 function tempsTravailleMin(paires, empId, dateISO) {
   let total = 0;
-  paires.forEach(p=>{
+  paires.forEach((p, idx)=>{
     if (p.in && p.out) {
       let a = hmToMin(p.in), b = hmToMin(p.out);
-      if (b <= a) b += 1440; // créneau après minuit
-      total += (b - a);
+      if (b < a) b += 1440; // créneau après minuit (mais heure identique = 0, pas 24 h)
+      let dur = b - a;
+      // forfait : 30 min déduites par service, sauf si la pause est marquée "travaillée"
+      if (empId && dateISO && !pauseTravaillee(empId, dateISO, idx)) {
+        dur -= Math.min(PAUSE_REPAS_MIN, dur);
+      }
+      total += dur;
     }
   });
-  // déduire les pauses repas si on connaît le salarié/jour
-  if (empId && dateISO) total -= tempsPauseMin(empId, dateISO);
   return Math.max(0, total);
+}
+/* Nombre de minutes de pause repas déduites sur la journée (pour affichage) */
+function pauseForfaitMin(empId, dateISO) {
+  let ded = 0;
+  pairesJour(empId, dateISO).forEach((p, idx)=>{
+    if (p.in && p.out && !pauseTravaillee(empId, dateISO, idx)) {
+      let a = hmToMin(p.in), b = hmToMin(p.out); if (b<a) b+=1440;
+      ded += Math.min(PAUSE_REPAS_MIN, b-a);
+    }
+  });
+  return ded;
 }
 
 /* Solde du jour = somme des soldes de chaque créneau prévu, comparé au créneau réel correspondant.
@@ -947,43 +982,27 @@ const App = {
       const isMgr = e.access==="manager";
       const bloque = badgeageBloque(id, date);
       const initials = e.nom.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
-      const enPause = pauseEnCours(id, date);
       let stLabel, stClass;
       if (bloque){ stLabel="⛔ Non pointé — voir gestion"; stClass="st-done"; }
       else if (st==="await"){ stLabel="À pointer"; stClass="st-await"; }
-      else if (enPause){
-        const ecoule = Math.max(0, Math.round((Date.now()-enPause.debutP.ts)/60000));
-        const depasse = ecoule >= PAUSE_REPAS_MIN;
-        stLabel = `🍽️ En pause — ${ecoule} min`; stClass = depasse ? "st-pause-over" : "st-pause";
-      }
       else if (st==="in"){
         const enc = paires.find(p=>p.in && !p.out);
         stLabel=`En service depuis ${enc.in}`; stClass="st-in";
       }
       else if (st==="pause"){
-        stLabel=`Pause — service suivant à pointer`; stClass="st-await";
+        stLabel=`Service suivant à pointer`; stClass="st-await";
       }
       else {
         const segs = paires.filter(p=>p.in&&p.out).map(p=>`${p.in}→${p.out}`).join("  ·  ");
         stLabel = segs || "Terminé"; stClass="st-done";
       }
-      let pauseBtn = "";
-      if (!isMgr && !bloque) {
-        if (enPause) {
-          pauseBtn = `<div class="pause-action" onclick="event.stopPropagation();App.finPause('${id}')">⏹️ Fin de pause</div>`;
-        } else if (st==="in") {
-          pauseBtn = `<div class="pause-action" onclick="event.stopPropagation();App.debutPause('${id}')">🍽️ Pause repas</div>`;
-        }
-      }
-      const cardCls = enPause ? (stClass==="st-pause-over"?"emp-card pause-over":"emp-card pause-on") : "emp-card";
       return `
-        <button class="${cardCls}${bloque?' card-locked':''}" onclick="App.startBadge('${id}')"${bloque?' style="opacity:.55"':''}>
+        <button class="emp-card${bloque?' card-locked':''}" onclick="App.startBadge('${id}')"${bloque?' style="opacity:.55"':''}>
           ${isRenfort?'<span class="renfort-tag">Renfort</span>':''}
           ${isExtra?'<span class="renfort-tag" style="background:var(--blue)">Extra</span>':''}
           <div class="avatar">${initials}</div>
           <div class="name">${e.nom}</div>
           <div class="status ${stClass}">${stLabel}</div>
-          ${pauseBtn}
         </button>`;
   },
 
@@ -1172,19 +1191,28 @@ const App = {
   },
   confirmBadge() {
     if (!this.sig.dirty) { toast("Merci de signer avant de valider.", "err"); return; }
-    const sigData = this.sig.canvas.toDataURL("image/png");
     const e = emp(this.badgeTarget);
     const now = new Date();
+    const hm = nowHM(now);
+    // Anti-doublon : un départ ne peut pas être pointé à la même minute que l'arrivée du service en cours
+    if (this.badgeAction==="out") {
+      const ouvert = pairesJour(this.badgeTarget, this.currentDate).find(p=>p.in && !p.out);
+      if (ouvert && ouvert.in === hm) {
+        toast("Arrivée et départ à la même minute : patientez au moins une minute avant de pointer le départ.", "err");
+        return;
+      }
+    }
+    const sigData = this.sig.canvas.toDataURL("image/png");
     // Si on pointe le DÉPART alors qu'une pause est encore ouverte -> clôturer la pause à l'heure du départ
     if (this.badgeAction==="out" && pauseEnCours(this.badgeTarget, this.currentDate)) {
-      this.finPause(this.badgeTarget, { heure:nowHM(now), ts:now.getTime(), auto:true, silent:true });
+      this.finPause(this.badgeTarget, { heure:hm, ts:now.getTime(), auto:true, silent:true });
     }
     DB.pointages.push({
       id: "p"+Date.now(),
       empId: this.badgeTarget,
       date: this.currentDate,
       type: this.badgeAction,
-      time: nowHM(now),
+      time: hm,
       ts: now.getTime(),
       signature: sigData
     });
@@ -1437,14 +1465,17 @@ const App = {
       // temps travaillé (pauses déduites) — 0 si absent
       const tt = absent ? 0 : tempsTravailleMin(paires, id, date);
       const ttLabel = absent ? '0h00' : (tt>0 ? `${Math.floor(tt/60)}h${String(tt%60).padStart(2,'0')}` : '—');
-      // pause repas déduite
-      const pauseMin = tempsPauseMin(id, date);
-      const enPauseLive = pauseEnCours(id, date);
+      // pause repas (forfait) : minutes déduites ce jour + détail par service
+      const nbServices = paires.filter(p=>p.in&&p.out).length;
+      const pauseDed = absent ? 0 : pauseForfaitMin(id, date);
       let pauseLabel;
-      if (absent) pauseLabel = '—';
-      else if (enPauseLive) pauseLabel = '<span style="color:var(--accent)">en cours…</span>';
-      else if (pauseMin>0) pauseLabel = `−${pauseMin} min`;
-      else pauseLabel = '—';
+      if (absent || !nbServices) pauseLabel = '—';
+      else {
+        const nbTrav = paires.filter((p,i)=>p.in&&p.out&&pauseTravaillee(id,date,i)).length;
+        if (pauseDed>0 && nbTrav>0) pauseLabel = `−${pauseDed} min <span style="color:var(--ink-dim)">(${nbTrav} travaillée${nbTrav>1?'s':''})</span>`;
+        else if (pauseDed>0) pauseLabel = `−${pauseDed} min`;
+        else pauseLabel = '<span style="color:var(--ink-soft)">travaillée</span>';
+      }
       // signature : on prend la 1re disponible
       const sig = paires.find(p=>p.inP&&p.inP.signature)?.inP.signature
                 || paires.find(p=>p.outP&&p.outP.signature)?.outP.signature || '';
@@ -1461,8 +1492,10 @@ const App = {
         const btnMal = !paires.length ? `<button class="btn btn-ghost btn-sm" style="color:#e8556b" onclick="App.marquerMaladie('${id}')">Arrêt maladie</button>` : '';
         actions = `<div class="row" style="gap:6px;justify-content:flex-end;flex-wrap:wrap">${btnMod}${btnAbs}${btnMal}</div>`;
       }
+      const com = DB.commentaires && DB.commentaires[date] && DB.commentaires[date][id];
+      const comTag = com ? ` <span title="${(com.texte||'').replace(/"/g,'&quot;')}" style="cursor:help">💬</span>` : '';
       rows += `<tr${rowStyle}>
-        <td>${e.nom}<div style="color:var(--ink-soft);font-size:.78rem">${e.role}</div></td>
+        <td>${e.nom}${comTag}<div style="color:var(--ink-soft);font-size:.78rem">${e.role}</div></td>
         <td class="num" style="font-size:.82rem">${prevuLabel}</td>
         <td class="num" style="font-size:.82rem">${reelLabel}</td>
         <td class="num" style="font-size:.82rem">${pauseLabel}</td>
@@ -1478,20 +1511,135 @@ const App = {
         🗓️ <span>Vous consultez le <b>${frDate(date)}</b> (jour passé). Vous pouvez régulariser les pointages ici.
         <span class="pill-link" style="display:inline;padding:2px 8px" onclick="App.jourConsulte=App.currentDate;App.renderAdminPanel()">Revenir à aujourd'hui</span></span></div>`;
     const selecteur = `
-      <div class="row mb" style="align-items:flex-end">
-        <label class="field" style="max-width:220px"><span>Jour consulté</span>
+      <div class="row mb" style="align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <label class="field" style="max-width:220px;flex:1"><span>Jour consulté</span>
           <input type="date" id="jourInput" value="${date}" max="${this.currentDate}"
             onchange="App.jourConsulte=this.value;App.renderAdminPanel()"></label>
+        <button class="btn btn-ghost btn-sm" onclick="App.gererPausesRepas()">🍽️ Pauses repas</button>
+        <button class="btn btn-ghost btn-sm" onclick="App.commenterComportement()">💬 Commentaire</button>
       </div>`;
     c.innerHTML = `${selecteur}${bandeau}` + (prevus.length ? `
       <div class="table-card"><table>
         <thead><tr><th>Salarié</th><th>Prévu</th><th>Réel (services)</th><th>Pause</th><th>Travaillé</th><th>Ponctualité</th><th>Signature</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
-      <p style="color:var(--ink-soft);font-size:.82rem;margin-top:12px">« Pause » = temps de pause repas déduit. « Travaillé » = présence réelle moins coupures et pauses. « Ponctualité » = retard/bonus cumulé sur les services prévus.</p>`
+      <p style="color:var(--ink-soft);font-size:.82rem;margin-top:12px">« Pause » = forfait repas déduit (30 min par service, sauf services marqués « travaillés » via 🍽️ Pauses repas). « Travaillé » = présence réelle moins coupures et pauses. « Ponctualité » = retard/bonus cumulé sur les services prévus.</p>`
       : `<div class="empty"><div class="ico">🗓️</div>Personne n'était prévu ce jour-là.</div>`);
   },
-  /* ----- ABSENCE / ARRÊT MALADIE (gestion) : ponctualité = 0, temps travaillé = 0 ----- */
+  /* ----- PAUSES REPAS (forfait 30 min/service, géré par jour) ----- */
+  gererPausesRepas() {
+    const date = this.jourConsulte || this.currentDate;
+    if (date > this.currentDate) { toast("Les pauses ne se gèrent pas pour un jour futur.", "err"); return; }
+    // construire la liste (salarié × service) pour les salariés ayant des services ce jour-là
+    const lignes = [];
+    prevusDuJour(date).concat([...new Set(DB.pointages.filter(p=>p.date===date).map(p=>p.empId))])
+      .filter((v,i,a)=>a.indexOf(v)===i).forEach(id=>{
+        const e = emp(id); if (!e || e.archived) return;
+        if (estAbsent(id, date)) return; // absent : pas de pause
+        const paires = pairesJour(id, date).filter(p=>p.in&&p.out);
+        paires.forEach((p, idx)=>{
+          lignes.push({ id, nom:e.nom, idx, creneau:`${p.in}–${p.out}`,
+            coche: pauseTravaillee(id, date, idx) }); // reflète l'annotation du jour OU le réglage durable
+        });
+      });
+    if (!lignes.length) { toast("Aucun service terminé à traiter ce jour-là.", "err"); return; }
+    const rows = lignes.map((l,i)=>`
+      <label style="display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--line);cursor:pointer">
+        <input type="checkbox" class="pauseChk" data-id="${l.id}" data-idx="${l.idx}" ${l.coche?'checked':''} style="width:18px;height:18px;flex:none">
+        <span style="flex:1">${l.nom}<span style="color:var(--ink-soft);font-size:.8rem"> · ${l.creneau}</span></span>
+      </label>`).join("");
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>🍽️ Pauses repas — ${frDate(date)}</h3>
+      <div class="modal-sub">Forfait : <b>30 min déduites par service</b> par défaut. <b>Cochez</b> les salariés qui ont <b>travaillé pendant leur pause</b> (30 min comptées comme travaillées) ; <b>décochez</b> ceux qui ont <b>pris leur pause</b>. Les salariés en réglage <b>« sans pause »</b> sont déjà cochés.</div>
+      <div class="row mb" style="gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.pauseChk').forEach(c=>c.checked=true)">Tout cocher</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.pauseChk').forEach(c=>c.checked=false)">Tout décocher</button>
+      </div>
+      <div class="table-card" style="max-height:46vh;overflow:auto;padding:4px 12px">${rows}</div>
+      <div class="row mt">
+        <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="App.validerPausesRepas('${date}')">Valider</button>
+      </div>`);
+  },
+  validerPausesRepas(date) {
+    if (date > this.currentDate) { toast("Jour futur impossible.", "err"); return; }
+    const chks = document.querySelectorAll(".pauseChk");
+    let nbTrav = 0, nbDed = 0;
+    chks.forEach(c=>{
+      const id = c.getAttribute("data-id"), idx = parseInt(c.getAttribute("data-idx"));
+      const auto = pauseAutoActif(id, date); // état dicté par le réglage durable (ou défaut déduit)
+      if (c.checked === auto) {
+        // identique au réglage durable / défaut -> pas d'annotation explicite (le réglage reste maître)
+        if (DB.pauseRepas[date] && DB.pauseRepas[date][id]) delete DB.pauseRepas[date][id][idx];
+      } else {
+        // exception du jour -> on enregistre l'annotation explicite (prioritaire)
+        if (!DB.pauseRepas[date]) DB.pauseRepas[date] = {};
+        if (!DB.pauseRepas[date][id]) DB.pauseRepas[date][id] = [];
+        DB.pauseRepas[date][id][idx] = c.checked;
+      }
+      if (c.checked) nbTrav++; else nbDed++;
+    });
+    saveDB();
+    const who = emp(this.session.empId).nom;
+    logAction(who, "Pauses repas", `${frDate(date)} : ${nbTrav} service(s) comptés travaillés (30 min), ${nbDed} service(s) pause déduite (30 min)`);
+    closeModal();
+    toast("Pauses repas enregistrées.", "ok");
+    this.renderAdminPanel();
+  },
+  /* ----- COMMENTAIRE SUR LE COMPORTEMENT (par salarié et par jour, tracé + exporté) ----- */
+  commenterComportement() {
+    const date = this.jourConsulte || this.currentDate;
+    if (date > this.currentDate) { toast("Pas de commentaire sur un jour futur.", "err"); return; }
+    // personnel pertinent : prévus + pointés du jour ; sinon tout l'effectif actif
+    let ids = prevusDuJour(date).concat([...new Set(DB.pointages.filter(p=>p.date===date).map(p=>p.empId))])
+      .filter((v,i,a)=>a.indexOf(v)===i).filter(id=>{ const e=emp(id); return e && !e.archived; });
+    if (!ids.length) ids = DB.team.filter(e=>!e.archived).map(e=>e.id);
+    if (!ids.length) { toast("Aucun salarié.", "err"); return; }
+    const opts = ids.map(id=>`<option value="${id}">${emp(id).nom}</option>`).join("");
+    const premier = DB.commentaires[date] && DB.commentaires[date][ids[0]] ? DB.commentaires[date][ids[0]].texte : "";
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>💬 Commentaire sur le comportement</h3>
+      <div class="modal-sub">${frDate(date)} — sélectionnez un salarié et notez une observation sur son comportement. C'est tracé au Journal et exporté en dernière colonne du CSV.</div>
+      <label class="field"><span>Salarié</span>
+        <select id="comEmp" onchange="App._chargerCommentaire()">${opts}</select></label>
+      <label class="field"><span>Commentaire</span>
+        <textarea id="comTexte" rows="4" placeholder="Ex. : très bon esprit d'équipe ce service / retard répété non justifié / attitude inappropriée envers un client…">${premier.replace(/</g,'&lt;')}</textarea></label>
+      <p style="font-size:.76rem;color:var(--ink-dim);margin:-4px 0 12px">Laissez vide puis Enregistrer pour supprimer le commentaire du salarié sélectionné.</p>
+      <div class="row mt">
+        <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="App.saveCommentaire('${date}')">Enregistrer</button>
+      </div>`);
+  },
+  _chargerCommentaire() {
+    const date = this.jourConsulte || this.currentDate;
+    const sel = document.getElementById("comEmp"); if (!sel) return;
+    const c = DB.commentaires[date] && DB.commentaires[date][sel.value];
+    const ta = document.getElementById("comTexte");
+    if (ta) ta.value = c ? c.texte : "";
+  },
+  saveCommentaire(date) {
+    if (date > this.currentDate) { toast("Jour futur impossible.", "err"); return; }
+    const id = document.getElementById("comEmp").value;
+    const texte = document.getElementById("comTexte").value.trim();
+    const e = emp(id); if (!e) return;
+    const who = emp(this.session.empId).nom;
+    if (!texte) {
+      if (DB.commentaires[date] && DB.commentaires[date][id]) {
+        delete DB.commentaires[date][id];
+        logAction(who, "Commentaire comportement", `${e.nom} (${frDate(date)}) : commentaire supprimé`);
+      }
+    } else {
+      if (!DB.commentaires[date]) DB.commentaires[date] = {};
+      DB.commentaires[date][id] = { texte, by: who, ts: Date.now() };
+      logAction(who, "Commentaire comportement", `${e.nom} (${frDate(date)}) : ${texte}`);
+    }
+    saveDB();
+    closeModal();
+    toast("Commentaire enregistré.", "ok");
+    this.renderAdminPanel();
+  },
   _marquerStatut(empId, type) {
     const e = emp(empId); if (!e) return;
     const date = this.jourConsulte || this.currentDate;
@@ -1539,20 +1687,36 @@ const App = {
       return;
     }
     const date = this.jourConsulte || this.currentDate;
-    const { inP, outP } = pointagesJour(empId, date);
-    const needComment = true; // commentaire obligatoire pour toute modif d'un salarié
+    const paires = pairesJour(empId, date);
+    const prevu = getPrevu(empId, date);
+    const nbCreneaux = prevu && prevu.creneaux ? prevu.creneaux.length : 0;
+    const nb = Math.max(paires.length, nbCreneaux, 1);
+    this.editCtx = { empId, date, nb };
+    let blocks = "";
+    for (let i=0;i<nb;i++){
+      const pr = prevu && prevu.creneaux ? prevu.creneaux[i] : null;
+      const pa = paires[i];
+      const titre = nb>1 ? `Service ${i+1}` : "Horaire";
+      blocks += `
+        <div style="border:1px solid var(--line);border-radius:12px;padding:12px 12px 2px;margin-bottom:10px">
+          <div style="font-weight:600;font-size:.85rem;margin-bottom:6px">${titre}${pr?` <span style="color:var(--ink-dim);font-weight:400">· prévu ${pr.debut}–${pr.fin}</span>`:''}</div>
+          <div class="row" style="gap:10px">
+            <label class="field" style="flex:1;min-width:120px"><span>Arrivée</span>
+              <input type="time" id="edIn${i}" value="${pa?(pa.in||''):''}"></label>
+            <label class="field" style="flex:1;min-width:120px"><span>Départ</span>
+              <input type="time" id="edOut${i}" value="${pa?(pa.out||''):''}"></label>
+          </div>
+        </div>`;
+    }
     openModal(`
       <button class="modal-close" onclick="closeModal()">×</button>
       <h3>${(DB.aVerifier&&DB.aVerifier[date]&&DB.aVerifier[date][empId])||badgeageBloque(empId,date)?'Régulariser':'Modifier'} — ${e.nom}</h3>
-      <div class="modal-sub">${frDate(date)}</div>
-      <label class="field"><span>Heure d'arrivée</span>
-        <input type="time" id="edIn" value="${inP?inP.time:''}"></label>
-      <label class="field"><span>Heure de départ</span>
-        <input type="time" id="edOut" value="${outP?outP.time:''}"></label>
+      <div class="modal-sub">${frDate(date)}${nb>1?` · ${nb} services (coupure)`:''}</div>
+      ${blocks}
       <label class="field"><span>Commentaire (obligatoire) — motif précis de la modification</span>
         <textarea id="edComment" placeholder="Ex. : oubli de pointage le midi, badgé manuellement après vérification"></textarea></label>
       <p style="font-size:.76rem;color:var(--ink-dim);margin:-6px 0 14px;line-height:1.5">
-        ⚠️ Règles : pas d'heure dans le futur · l'arrivée ne peut qu'être <b>retardée</b>, le départ qu'<b>avancé</b> (impossible d'ajouter des heures).</p>
+        ⚠️ Règles : pas d'heure dans le futur · pour un service existant, l'arrivée ne peut qu'être <b>retardée</b>, le départ qu'<b>avancé</b> (impossible d'ajouter des heures) · laissez un service vide pour le supprimer.</p>
       <div class="row mt">
         <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
         <button class="btn btn-primary" onclick="App.saveEditPointage('${empId}')">Enregistrer</button>
@@ -1561,63 +1725,56 @@ const App = {
   saveEditPointage(empId) {
     const e = emp(empId);
     const date = this.jourConsulte || this.currentDate;
-    const newIn = document.getElementById("edIn").value;
-    const newOut = document.getElementById("edOut").value;
     const comment = document.getElementById("edComment").value.trim();
     if (!comment) { toast("Le commentaire est obligatoire pour modifier un horaire.", "err"); return; }
-    const { inP, outP } = pointagesJour(empId, date);
-    const oldIn = inP?inP.time:"—", oldOut = outP?outP.time:"—";
+    const nb = (this.editCtx && this.editCtx.empId===empId) ? this.editCtx.nb : 1;
+    const oldPaires = pairesJour(empId, date);
 
-    // --- RÈGLE 1 : pas d'heure dans le futur ---
-    const now = new Date();
     const tsOf = (hm)=>{ if(!hm) return null; const [h,m]=hm.split(":").map(Number); const [y,mo,d]=date.split("-").map(Number); return new Date(y,mo-1,d,h,m).getTime(); };
-    // pour gérer un départ après minuit (service de nuit), on tolère le lendemain matin
-    const futureCheck = (hm, label)=>{
-      if(!hm) return true;
-      const t = tsOf(hm);
-      if (t > now.getTime() + 60000) { // tolérance 1 min
-        toast(`${label} : impossible de saisir une heure dans le futur.`, "err");
-        return false;
-      }
-      return true;
-    };
-    if (!futureCheck(newIn, "Arrivée")) return;
-    if (!futureCheck(newOut, "Départ")) return;
+    const now = Date.now();
 
-    // --- RÈGLE 2 : une modification ne peut que RÉDUIRE le temps de présence ---
-    // Arrivée : ne peut être que retardée (>= ancienne). Départ : ne peut être qu'avancé (<= ancien).
-    if (inP && newIn) {
-      if (tsOf(newIn) < tsOf(oldIn) - 60000) {
-        toast("L'arrivée ne peut être que retardée, pas avancée (anti-ajout d'heures).", "err");
-        return;
-      }
-    }
-    if (outP && newOut) {
-      if (tsOf(newOut) > tsOf(oldOut) + 60000) {
-        toast("Le départ ne peut être qu'avancé, pas repoussé (anti-ajout d'heures).", "err");
-        return;
-      }
+    // collecte des services saisis
+    const services = [];
+    for (let i=0;i<nb;i++){
+      const inEl = document.getElementById("edIn"+i), outEl = document.getElementById("edOut"+i);
+      services.push({ in: inEl?inEl.value:"", out: outEl?outEl.value:"", old: oldPaires[i]||null });
     }
 
-    const who = emp(this.session.empId).nom;
-    // appliquer (on remplace/crée les pointages, en gardant signature existante si présente)
-    this._setPointage(empId, date, "in", newIn, inP);
-    this._setPointage(empId, date, "out", newOut, outP);
-    // si la Direction régularise, on lève le flag "à vérifier"
-    if ((newIn || newOut) && DB.aVerifier && DB.aVerifier[date] && DB.aVerifier[date][empId]) {
-      delete DB.aVerifier[date][empId];
+    // validations PAR SERVICE
+    for (let i=0;i<services.length;i++){
+      const s = services[i], lbl = nb>1?`Service ${i+1} — `:"";
+      // RÈGLE 1 : pas d'heure dans le futur
+      if (s.in && tsOf(s.in) > now+60000) { toast(`${lbl}arrivée : heure dans le futur impossible.`, "err"); return; }
+      if (s.out && tsOf(s.out) > now+60000) { toast(`${lbl}départ : heure dans le futur impossible.`, "err"); return; }
+      // RÈGLE 2 : pour un service EXISTANT, l'arrivée ne peut qu'être retardée, le départ qu'avancé
+      if (s.old && s.old.in && s.in && tsOf(s.in) < tsOf(s.old.in)-60000) { toast(`${lbl}l'arrivée ne peut être que retardée (anti-ajout d'heures).`, "err"); return; }
+      if (s.old && s.old.out && s.out && tsOf(s.out) > tsOf(s.old.out)+60000) { toast(`${lbl}le départ ne peut être qu'avancé (anti-ajout d'heures).`, "err"); return; }
+      // RÈGLE 3 : arrivée et départ ne peuvent pas être à la même heure (durée nulle / +24 h)
+      if (s.in && s.out && s.in === s.out) { toast(`${lbl}arrivée et départ identiques : corrigez les heures.`, "err"); return; }
     }
+
+    // RECONSTRUCTION non destructive : on retire les in/out du jour puis on recrée service par service
+    DB.pointages = DB.pointages.filter(p=>!(p.empId===empId && p.date===date && (p.type==="in"||p.type==="out")));
+    services.forEach(s=>{
+      if (s.in)  this._pushPointage(empId, date, "in",  s.in,  s.old?s.old.inP:null);
+      if (s.out) this._pushPointage(empId, date, "out", s.out, s.old?s.old.outP:null);
+    });
+
+    const aQqc = services.some(s=>s.in||s.out);
+    if (aQqc && DB.aVerifier && DB.aVerifier[date] && DB.aVerifier[date][empId]) delete DB.aVerifier[date][empId];
+
     saveDB();
-    logAction(who, "Modification horaire",
-      `${e.nom} — ${date} : arrivée ${oldIn}→${newIn||'—'}, départ ${oldOut}→${newOut||'—'}. Motif : ${comment}`);
+    const who = emp(this.session.empId).nom;
+    const detail = services.map((s,i)=>`S${i+1} ${s.old?(s.old.in||'—'):'—'}→${s.in||'—'} / ${s.old?(s.old.out||'—'):'—'}→${s.out||'—'}`).join(" · ");
+    logAction(who, "Modification horaire", `${e.nom} — ${date} : ${detail}. Motif : ${comment}`);
+    this.editCtx = null;
     closeModal();
-    toast("Horaire modifié et journalisé.", "ok");
+    toast("Horaire(s) modifié(s) et journalisé(s).", "ok");
     this.renderAdminPanel();
   },
-  _setPointage(empId, date, type, hm, existing) {
-    // retire les anciens pointages de ce type pour ce jour
-    DB.pointages = DB.pointages.filter(p=>!(p.empId===empId && p.date===date && p.type===type));
-    if (!hm) return; // si vide => supprimé
+  /* Ajoute un pointage (sans effacer les autres du même type) */
+  _pushPointage(empId, date, type, hm, existing) {
+    if (!hm) return;
     const [h,m] = hm.split(":").map(Number);
     const [y,mo,d] = date.split("-").map(Number);
     const ts = new Date(y,mo-1,d,h,m).getTime();
@@ -1868,10 +2025,16 @@ const App = {
       const canSect = isDir || e.access!=="dirigeant";
       const btnSect = canSect
         ? `<button class="btn btn-ghost btn-sm" onclick="App.changeSecteur('${e.id}')">Secteur</button>` : "";
+      // réglage durable "ne prend pas ses pauses"
+      const sansPause = pauseAutoActifMaintenant(e.id);
+      const tagPause = sansPause
+        ? `<span class="badge-delta" style="background:rgba(240,168,48,.18);color:var(--accent);margin-left:6px">🍽️ sans pause</span>` : "";
+      const btnPause = canSect
+        ? `<button class="btn btn-ghost btn-sm"${sansPause?' style="color:var(--accent)"':''} onclick="App.togglePauseAuto('${e.id}')">${sansPause?'Réactiver pauses':'Sans pause'}</button>` : "";
       return `<tr>
-        <td>${e.nom}${tagAcces}${tagSect}<div style="color:var(--ink-soft);font-size:.78rem">${e.role}</div></td>
+        <td>${e.nom}${tagAcces}${tagSect}${tagPause}<div style="color:var(--ink-soft);font-size:.78rem">${e.role}</div></td>
         <td class="num" style="letter-spacing:.3em">••••</td>
-        <td><div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${btnPin}${btnVoir}${btnSect}${btnAcces}${btnArch}</div></td>
+        <td><div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${btnPin}${btnVoir}${btnSect}${btnPause}${btnAcces}${btnArch}</div></td>
       </tr>`;
     }).join("");
     // Section des salariés archivés
@@ -2018,6 +2181,27 @@ const App = {
     logAction(emp(this.session.empId).nom, "Changement de secteur", `${e.nom} → ${secteur}`);
     closeModal();
     toast(`${e.nom} : secteur ${secteur}.`, "ok");
+    this.renderAdminPanel();
+  },
+  /* Réglage durable : "ne prend pas ses pauses repas" (30 min comptées comme travaillées),
+     du jour où on l'active jusqu'au jour où on le désactive (historique de périodes, non rétroactif) */
+  togglePauseAuto(empId) {
+    const e = emp(empId); if (!e) return;
+    if (this.session.access!=="dirigeant" && e.access==="dirigeant") { toast("Action réservée au Dirigeant.", "err"); return; }
+    if (!DB.pauseAuto[empId]) DB.pauseAuto[empId] = [];
+    const arr = DB.pauseAuto[empId];
+    const actif = arr.length && arr[arr.length-1].to === null;
+    const who = emp(this.session.empId).nom;
+    if (actif) {
+      arr[arr.length-1].to = this.currentDate; // reprend ses pauses à partir d'aujourd'hui (jours passés inchangés)
+      logAction(who, "Pauses repas (durable)", `${e.nom} : REPREND ses pauses à partir du ${this.currentDate}`);
+      toast(`${e.nom} reprend ses pauses repas.`, "ok");
+    } else {
+      arr.push({ from: this.currentDate, to: null });
+      logAction(who, "Pauses repas (durable)", `${e.nom} : NE PREND PLUS ses pauses à partir du ${this.currentDate} (30 min comptées comme travaillées)`);
+      toast(`${e.nom} : pauses non prises (comptées comme travaillées).`, "ok");
+    }
+    saveDB();
     this.renderAdminPanel();
   },
   _activiteAujourdhui(empId) {
@@ -2315,6 +2499,9 @@ const App = {
     DB.settings=DB.settings||{emailjs:{serviceId:"",templateId:"",publicKey:""},alertEmail:"",maxTries:3};
     DB.aVerifier=DB.aVerifier||{};
     DB.absences=DB.absences||{};
+    DB.pauseRepas=DB.pauseRepas||{};
+    DB.pauseAuto=DB.pauseAuto||{};
+    DB.commentaires=DB.commentaires||{};
     saveDB();
     logAction("Système", "Restauration sauvegarde", `Fichier : ${pending.name}`);
     this._restaurePending = null;
@@ -2333,22 +2520,29 @@ const App = {
     toast("Restauration annulée.", "ok");
   },
   exportPointages() {
-    let csv = "Date;Salarié;Rôle;Service n°;Prévu début;Prévu fin;Arrivée réelle;Départ réel;Pause repas (min);Temps travaillé jour;Ponctualité jour (min);Modifié par\n";
-    const dates = [...new Set([...DB.pointages.map(p=>p.date), ...Object.keys(DB.absences||{})])].sort().filter(d=>this._dansPlage(d));
+    let csv = "Date;Salarié;Rôle;Service n°;Prévu début;Prévu fin;Arrivée réelle;Départ réel;Pause repas;Temps travaillé jour;Ponctualité jour (min);Modifié par;Commentaire comportement\n";
+    const csvCom = (d,id)=>{ const c = DB.commentaires && DB.commentaires[d] && DB.commentaires[d][id] && DB.commentaires[d][id].texte;
+      return c ? '"'+String(c).replace(/"/g,'""').replace(/[\r\n]+/g,' ')+'"' : ''; };
+    const dates = [...new Set([...DB.pointages.map(p=>p.date), ...Object.keys(DB.absences||{}), ...Object.keys(DB.commentaires||{})])].sort().filter(d=>this._dansPlage(d));
     let nbLignes = 0;
     dates.forEach(d=>{
       prevusDuJour(d).concat([...new Set(DB.pointages.filter(p=>p.date===d).map(p=>p.empId))])
+        .concat(DB.commentaires[d]?Object.keys(DB.commentaires[d]):[])
         .filter((v,i,a)=>a.indexOf(v)===i).forEach(id=>{
         const e = emp(id); if(!e) return;
         const paires = pairesJour(id, d);
         if(!paires.length){
-          // salarié marqué absent / en arrêt maladie : ligne explicite, ponctualité 0, temps 0
+          // salarié marqué absent / en arrêt maladie, OU simple commentaire sans pointage
           if (estAbsent(id, d)) {
             const prevuA = getPrevu(id, d);
             const crA = prevuA && prevuA.creneaux ? prevuA.creneaux[0] : null;
             const info = DB.absences[d] && DB.absences[d][id] ? DB.absences[d][id] : {};
             const lib = (info.type==="maladie") ? "ARRÊT MALADIE" : "ABSENT";
-            csv += `${d};${e.nom};${e.role};;${crA?crA.debut:''};${crA?crA.fin:''};${lib};${lib};;0h00;0;${info.by||''}\n`;
+            csv += `${d};${e.nom};${e.role};;${crA?crA.debut:''};${crA?crA.fin:''};${lib};${lib};;0h00;0;${info.by||''};${csvCom(d,id)}\n`;
+            nbLignes++;
+          } else if (csvCom(d,id)) {
+            // commentaire de comportement sans pointage ni absence : on l'exporte quand même
+            csv += `${d};${e.nom};${e.role};;;;;;;;;;${csvCom(d,id)}\n`;
             nbLignes++;
           }
           return;
@@ -2357,11 +2551,12 @@ const App = {
         const solde = calcSoldeJour(prevu, paires);
         const tt = tempsTravailleMin(paires, id, d);
         const ttLabel = tt>0 ? `${Math.floor(tt/60)}h${String(tt%60).padStart(2,'0')}` : '';
-        const pauseMin = tempsPauseMin(id, d);
+        const comCell = csvCom(d,id);
         paires.forEach((p,i)=>{
           const cr = prevu && prevu.creneaux ? prevu.creneaux[i] : null;
           const modif = (p.inP?.editedBy || p.outP?.editedBy || '');
-          csv += `${d};${e.nom};${e.role};${i+1};${cr?cr.debut:''};${cr?cr.fin:''};${p.in||''};${p.out||''};${i===0&&pauseMin>0?pauseMin:''};${i===0?ttLabel:''};${i===0&&solde!==null?solde:''};${modif}\n`;
+          const pauseCol = (p.in&&p.out) ? (pauseTravaillee(id,d,i) ? "travaillée (incluse)" : "-30 min déduites") : "";
+          csv += `${d};${e.nom};${e.role};${i+1};${cr?cr.debut:''};${cr?cr.fin:''};${p.in||''};${p.out||''};${pauseCol};${i===0?ttLabel:''};${i===0&&solde!==null?solde:''};${modif};${i===0?comCell:''}\n`;
           nbLignes++;
         });
       });
@@ -2804,13 +2999,23 @@ async function parseXlsxPlanning(arrayBuffer) {
     const fxml = zip[fpath] || zip["xl/"+rels[fiche.rId]] || zip[rels[fiche.rId]];
     if (fxml) {
       const fcells = parseSheet(fxml, sst);
+      // trouver la ligne d'en-tête "Nom" (colonne A) ; les salariés sont juste en dessous. Sinon, repli ligne 4.
+      let startRow = null;
+      for (let r = 1; r <= 40; r++) {
+        const a = fcells[`A${r}`];
+        if (a && String(a).trim().toLowerCase() === "nom") { startRow = r + 1; break; }
+      }
+      if (!startRow) startRow = 4;
       let vides = 0;
-      for (let r = 4; r <= 60 && vides < 3; r++) {
+      for (let r = startRow; r <= startRow + 80 && vides < 3; r++) {
         const nom = fcells[`A${r}`];
         if (!nom || String(nom).trim() === "") { vides++; continue; }
         vides = 0;
-        if (!estNomValide(nom)) continue; // ignore "TOTAUX ÉQUIPE", en-têtes, etc.
-        personnel.push({ nom: String(nom).trim(), poste: fcells[`B${r}`] ? String(fcells[`B${r}`]).trim() : "" });
+        if (String(nom).trim().toLowerCase().startsWith("total")) break; // fin de liste : "TOTAUX ÉQUIPE"
+        const nomT = String(nom).trim();
+        if (nomT.length > 40 || /[•:→›»]/.test(nomT)) continue; // ignore les lignes d'aide / explications
+        if (!estNomValide(nom)) continue; // ignore en-têtes, etc.
+        personnel.push({ nom: nomT, poste: fcells[`B${r}`] ? String(fcells[`B${r}`]).trim() : "" });
       }
     }
   }
@@ -2828,27 +3033,54 @@ async function parseXlsxPlanning(arrayBuffer) {
     const xml = zip[path] || zip["xl/"+rels[s.rId]] || zip[rels[s.rId]];
     if (!xml) continue;
     const cells = parseSheet(xml, sst); // { "B12": "valeur", ... }
-    const headerRow = HEADER[moisNum];
-    // jours : colonnes B..AF, ligne headerRow contient les numéros de jour
-    // chaque salarié est sur la ligne headerRow + 1 + index
-    // On lit jusqu'à 12 salariés
-    for (let i=0;i<14;i++){
-      const row = headerRow + 1 + i;
+
+    // (1) ANNÉE : lue dans le titre (ex. "Planning Janvier 2026 — Restaurant") ; sinon année courante
+    let annee = null;
+    for (let r=1; r<=4 && !annee; r++){
+      const m = cells[`A${r}`] && String(cells[`A${r}`]).match(/(20\d{2})/);
+      if (m) annee = parseInt(m[1]);
+    }
+    if (!annee) annee = new Date().getFullYear();
+
+    // (2) LIGNE D'EN-TÊTE : la ligne où la colonne A vaut "Personnel" ; sinon repli sur la table figée
+    let headerRow = null;
+    for (let r=1; r<=40; r++){
+      const a = cells[`A${r}`];
+      if (a && String(a).trim().toLowerCase()==="personnel") { headerRow = r; break; }
+    }
+    if (!headerRow) headerRow = HEADER[moisNum] || 11;
+
+    // (3) COLONNES-JOURS : détectées depuis l'en-tête. Une colonne n'est un "jour" que si son
+    //     en-tête contient un nombre valide dans [1..nb de jours du mois]. La colonne "Heures du
+    //     mois" (sans n° de jour) et tout ce qui dépasse le mois sont automatiquement exclus.
+    const nbJoursMois = new Date(annee, moisNum, 0).getDate(); // 28/29/30/31 — bissextiles gérées
+    const colJour = {}; // colonne -> numéro de jour
+    for (let col=2; col<=50; col++){
+      const h = cells[`${colName(col)}${headerRow}`];
+      if (h==null || h==="") continue;
+      const nums = String(h).match(/\d{1,2}/g);
+      if (!nums) continue;
+      const jour = parseInt(nums[nums.length-1]);
+      if (jour>=1 && jour<=nbJoursMois) colJour[col] = jour;
+    }
+
+    // (4) SALARIÉS : à partir de headerRow+1, jusqu'à 3 lignes vides d'affilée (colonne A)
+    let vides = 0;
+    for (let row = headerRow+1; row <= headerRow+80 && vides < 3; row++){
       const nom = cells[`A${row}`];
-      if (!nom) continue;
+      if (!nom || String(nom).trim()==="") { vides++; continue; }
+      vides = 0;
+      if (String(nom).trim().toLowerCase().startsWith("total")) break; // fin de liste : "TOTAL ÉQUIPE"
       if (estNomValide(nom)) nomsVus.add(String(nom).trim()); // mémoriser pour création auto
       const empId = matchEmp(nom);
       if (!empId) continue;
-      // parcourir les colonnes B..AF (2..32)
-      for (let col=2; col<=32; col++){
-        const colLetter = colName(col);
-        const code = cells[`${colLetter}${row}`];
+      // ne parcourir QUE les vraies colonnes-jours détectées
+      for (const colKey in colJour){
+        const col = +colKey;
+        const code = cells[`${colName(col)}${row}`];
         if (!code) continue;
-        // 1) Essai en correspondance stricte (code prédéfini)
         let entry = CODE_HORAIRES[code] ? { creneaux: CODE_HORAIRES[code].creneaux.map(cr=>({debut:cr.debut, fin:cr.fin})) } : null;
-        // 2) Sinon, parser souple
         if (!entry) entry = parseHoraire(code);
-        // 3) Toujours rien : ignorer (et tracer seulement si ce n'est pas un code "non-horaire" connu)
         if (!entry) {
           const norm = String(code).trim().toUpperCase();
           if (!NON_HORAIRE.has(norm) && !NON_HORAIRE.has(norm.replace(/^H\s*/, ""))) {
@@ -2856,9 +3088,8 @@ async function parseXlsxPlanning(arrayBuffer) {
           }
           continue;
         }
-        const jour = readDayNumber(cells, headerRow, colLetter, col);
-        if (!jour) continue;
-        const dateISO = `2026-${String(moisNum).padStart(2,"0")}-${String(jour).padStart(2,"0")}`;
+        const jour = colJour[col];
+        const dateISO = `${annee}-${String(moisNum).padStart(2,"0")}-${String(jour).padStart(2,"0")}`;
         if (!planning[dateISO]) planning[dateISO] = {};
         planning[dateISO][empId] = { creneaux: entry.creneaux, code };
       }
