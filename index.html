@@ -1016,25 +1016,65 @@ const App = {
       return;
     }
     const st = statutJour(empId, date);
-    const isRenfortExtra = estExtra(empId, date) || estRenfort(empId, date);
-    // Bloquer seulement si tous les services prévus sont faits (sauf renfort/extra qui peuvent en rajouter)
-    if (st==="done" && !isRenfortExtra) {
-      toast(`${e.nom} a déjà pointé tous ses services aujourd'hui.`, "err");
-      return;
-    }
+    if (st==="in") { this._lancerPointage(empId, "out"); return; }    // service ouvert -> pointer le départ
+    const aServiceFait = pairesJour(empId, date).some(p=>p.in && p.out);
+    // un service est déjà terminé (et aucun en cours) : proposer le CHOIX reprise / nouvelle arrivée
+    if (aServiceFait) { this.proposerChoixPointage(empId); return; }
+    this._lancerPointage(empId, "in");                                // toute première arrivée
+  },
+  /* Lance le pointage (PIN si nécessaire, puis signature) */
+  _lancerPointage(empId, action) {
+    const e = emp(empId);
     this.badgeTarget = empId;
-    // si un service est en cours -> on pointe le départ ; sinon une nouvelle arrivée
-    this.badgeAction = (st==="in") ? "out" : "in";
-    // Un extra n'a pas de PIN : on va directement à la signature
-    if (estExtra(empId, date)) {
-      this.askSignature(e);
-      return;
-    }
-    // Demander le PIN puis la signature
+    this.badgeAction = action;
+    if (estExtra(empId, this.currentDate)) { this.askSignature(e); return; } // extra : pas de PIN
     this.askPin(e, (ok)=>{
       if (!ok) { toast("Code PIN incorrect.", "err"); return; }
       this.askSignature(e);
     });
+  },
+
+  /* ---------- REPRISE DE SERVICE vs NOUVELLE ARRIVÉE (départ déjà pointé) ---------- */
+  proposerChoixPointage(empId) {
+    const e = emp(empId);
+    const date = this.currentDate;
+    const dern = DB.pointages.filter(p=>p.empId===empId && p.date===date && p.type==="out").sort((a,b)=>b.ts-a.ts)[0];
+    const heure = dern ? dern.time : "";
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>${e.nom}</h3>
+      <div class="modal-sub">Le départ ${heure?`de <b>${heure}</b> `:''}a déjà été pointé. Que souhaitez-vous faire ?</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px">
+        <button class="btn btn-green" onclick="App.nouveauPointage('${empId}')">🟢 Nouvelle arrivée (service du soir)</button>
+        <button class="btn btn-ghost" onclick="App.confirmReprise('${empId}')">↩️ Reprendre le service actuel (erreur de pointage de départ)</button>
+      </div>`);
+  },
+  nouveauPointage(empId) {
+    closeModal();
+    this._lancerPointage(empId, "in");
+  },
+  confirmReprise(empId) {
+    const e = emp(empId);
+    if (estExtra(empId, this.currentDate)) { this.reprendreService(empId); return; } // extra : pas de PIN
+    this.badgeTarget = empId;
+    this.badgeAction = "reprise";
+    this.askPin(e, (ok)=>{
+      if (!ok) { toast("Code PIN incorrect.", "err"); return; }
+      this.reprendreService(empId);
+    });
+  },
+  reprendreService(empId) {
+    const e = emp(empId);
+    const date = this.currentDate;
+    const outs = DB.pointages.filter(p=>p.empId===empId && p.date===date && p.type==="out").sort((a,b)=>b.ts-a.ts);
+    if (!outs.length) { toast("Aucun départ à annuler.", "err"); return; }
+    const dern = outs[0];
+    DB.pointages = DB.pointages.filter(p=>p.id !== dern.id);
+    saveDB();
+    closeModal();
+    logAction(e.nom, "Reprise de service", `Départ de ${dern.time} annulé (pointé par erreur) — service rouvert`);
+    toast(`${e.nom} : service repris. Pensez à pointer votre départ réel en partant.`, "ok");
+    this.renderBadge();
   },
 
   /* ---------- PAUSE REPAS ---------- */
@@ -1115,7 +1155,7 @@ const App = {
     openModal(`
       <button class="modal-close" onclick="closeModal()">×</button>
       <h3>${e.nom}</h3>
-      <div class="modal-sub">${this.badgeAction==='in'?'🟢 Pointer l’arrivée':'🔴 Pointer le départ'} · saisissez votre code PIN</div>
+      <div class="modal-sub">${this.badgeAction==='reprise'?'↩️ Reprendre le service (annuler le départ)':(this.badgeAction==='in'?'🟢 Pointer l’arrivée':'🔴 Pointer le départ')} · saisissez votre code PIN</div>
       <div class="pin-display" id="pinDisplay">${dots(0)}</div>
       <div class="pinpad">
         ${[1,2,3,4,5,6,7,8,9].map(n=>`<button class="pinkey" onclick="App.pinPress('${n}')">${n}</button>`).join("")}
