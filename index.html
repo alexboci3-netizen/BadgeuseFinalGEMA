@@ -445,26 +445,84 @@ function parseHoraire(brut) {
 /* ---- État applicatif ---- */
 let DB = null;
 
-function loadDB() {
+/* ====================================================================
+   STOCKAGE : IndexedDB (grande capacité, compatible Safari iPad & autres
+   navigateurs) avec repli localStorage. DB reste en MÉMOIRE (le reste de
+   l'app est synchrone) ; seule la persistance est asynchrone, en arrière-plan.
+   ==================================================================== */
+const IDB_NAME = "badgeuse_db", IDB_STORE = "kv", IDB_KEY = "DB";
+let _idb = null, _idbKO = false;
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    if (_idb) return resolve(_idb);
+    if (typeof indexedDB === "undefined") { _idbKO = true; return reject(new Error("IndexedDB indisponible")); }
+    let req;
+    try { req = indexedDB.open(IDB_NAME, 1); } catch(e) { _idbKO = true; return reject(e); }
+    req.onupgradeneeded = () => { try { req.result.createObjectStore(IDB_STORE); } catch(_){} };
+    req.onsuccess = () => { _idb = req.result; resolve(_idb); };
+    req.onerror   = () => { _idbKO = true; reject(req.error); };
+  });
+}
+function idbGet() {
+  return idbOpen().then(db => new Promise((resolve, reject) => {
+    const r = db.transaction(IDB_STORE, "readonly").objectStore(IDB_STORE).get(IDB_KEY);
+    r.onsuccess = () => resolve(r.result);
+    r.onerror   = () => reject(r.error);
+  }));
+}
+function idbSet(val) {
+  return idbOpen().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put(val, IDB_KEY);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror    = () => reject(tx.error || new Error("écriture IndexedDB échouée"));
+    tx.onabort    = () => reject(tx.error || new Error("transaction IndexedDB annulée"));
+  }));
+}
+
+/* Compression de la signature : on réduit la résolution puis on exporte en
+   JPEG (fond blanc). De l'ordre de 5 à 10x plus léger qu'un PNG plein écran. */
+function compresserSignature(srcCanvas, maxW) {
+  maxW = maxW || 380;
   try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (raw) { DB = JSON.parse(raw); }
-  } catch(e) { console.warn("Lecture stockage impossible", e); }
+    const sw = srcCanvas.width || maxW, sh = srcCanvas.height || Math.round(maxW/3);
+    const ratio = Math.min(1, maxW / sw);
+    const w = Math.max(1, Math.round(sw * ratio)), h = Math.max(1, Math.round(sh * ratio));
+    const off = document.createElement("canvas"); off.width = w; off.height = h;
+    const ctx = off.getContext("2d");
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h);   // JPEG ne gère pas la transparence
+    ctx.drawImage(srcCanvas, 0, 0, w, h);
+    return off.toDataURL("image/jpeg", 0.6);
+  } catch(e) {
+    try { return srcCanvas.toDataURL("image/png"); } catch(_) { return ""; } // repli
+  }
+}
+
+async function loadDB() {
+  let loaded = null;
+  // 1) IndexedDB
+  try { loaded = await idbGet(); } catch(e) { console.warn("Lecture IndexedDB impossible", e); }
+  // 2) Migration unique depuis l'ancien localStorage (puis on libère les ~5 Mo)
+  if (!loaded) {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) {
+        loaded = JSON.parse(raw);
+        try { await idbSet(loaded); localStorage.removeItem(STORE_KEY); }
+        catch(e) { console.warn("Migration vers IndexedDB impossible", e); }
+      }
+    } catch(e) { console.warn("Lecture localStorage impossible", e); }
+  }
+  if (loaded) DB = loaded;
   if (!DB) {
     DB = {
       team: JSON.parse(JSON.stringify(DEFAULT_TEAM)),
-      planning: {},     // { "AAAA-MM-JJ": { empId: {debut,fin,code} } }
-      renforts: {},     // { "AAAA-MM-JJ": { empId: {motif,by,at} } }
-      extras: {},       // { "AAAA-MM-JJ": { extraId: {nom,prenom,poste,commentaire,by,at} } }
-      pointages: [],    // { id, empId, date, type:"in"|"out", time:"HH:MM", ts, signature }
-      journal: [],      // { ts, who, action, detail }
+      planning: {}, renforts: {}, extras: {}, pointages: [], journal: [],
       lastPlanningName: null,
       security: { failCount:0, locked:false, lockedAt:null },
       settings: { emailjs:{ serviceId:"", templateId:"", publicKey:"" }, alertEmail:"", maxTries:3, seuilConflits:5 },
-      lastBusinessDay: null,
-      lastBackupMonth: null
+      lastBusinessDay: null, lastBackupMonth: null
     };
-    saveDB();
   }
   // garde-fous structure
   DB.team       = DB.team || [];
@@ -483,6 +541,7 @@ function loadDB() {
   if (!DB.settings.emailjs) DB.settings.emailjs = { serviceId:"", templateId:"", publicKey:"" };
   if (!DB.settings.maxTries) DB.settings.maxTries = 3;
   if (!DB.settings.seuilConflits) DB.settings.seuilConflits = 5;
+  saveDB();           // persiste (init par défaut, migration, ou nouveaux garde-fous)
   checkAutoUnlock();
 }
 
@@ -505,9 +564,34 @@ function checkAutoUnlock() {
   return false;
 }
 
+let _saving = false, _savePending = false;
 function saveDB() {
+  // Persistance asynchrone en IndexedDB, avec coalescence (une écriture à la fois).
+  if (_idbKO) return _saveFallback();
+  if (_saving) { _savePending = true; return; }
+  _saving = true;
+  idbSet(DB).then(() => {
+    _saving = false;
+    if (_savePending) { _savePending = false; saveDB(); }
+  }).catch(() => {
+    _saving = false;
+    // IndexedDB plein : on allège le journal (dernier recours) puis on retente une fois
+    if (DB.journal && DB.journal.length > 1500) {
+      DB.journal = DB.journal.slice(0, 1500);
+      idbSet(DB)
+        .then(() => toast("Mémoire de l'appareil pleine : le journal a été réduit aux 1500 actions les plus récentes pour pouvoir enregistrer. Exportez une sauvegarde (.json) dès que possible.", "err"))
+        .catch(() => _saveFallback());
+    } else {
+      _saveFallback();
+    }
+  });
+}
+function _saveFallback() {
+  // repli localStorage (petite capacité) si IndexedDB est indisponible
   try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
-  catch(e) { toast("Erreur d'enregistrement (stockage plein ?)", "err"); }
+  catch(e) {
+    toast("Mémoire de l'appareil pleine : enregistrement impossible. Exportez vite une sauvegarde (.json), puis libérez de la place (archiver d'anciens salariés, exporter puis effacer d'anciens mois).", "err");
+  }
 }
 
 /* ---- Utilitaires date/heure ---- */
@@ -1242,7 +1326,7 @@ const App = {
         return;
       }
     }
-    const sigData = this.sig.canvas.toDataURL("image/png");
+    const sigData = compresserSignature(this.sig.canvas);
     // Si on pointe le DÉPART alors qu'une pause est encore ouverte -> clôturer la pause à l'heure du départ
     if (this.badgeAction==="out" && pauseEnCours(this.badgeTarget, this.currentDate)) {
       this.finPause(this.badgeTarget, { heure:hm, ts:now.getTime(), auto:true, silent:true });
@@ -2344,14 +2428,14 @@ const App = {
 
   /* ----- onglet JOURNAL ----- */
   tabJournal(c) {
-    const j = DB.journal.slice(0,300);
+    const j = DB.journal.slice(0,900);
     if (!j.length) { c.innerHTML = `<div class="empty"><div class="ico">📝</div>Aucune action enregistrée pour le moment.</div>`; return; }
     c.innerHTML = `
       <div class="row mb" style="align-items:center;gap:12px;flex-wrap:wrap">
         <input type="text" id="journalFilter" placeholder="🔎 Filtrer (nom, action, détail, date)…"
           oninput="App.filtrerJournal(this.value)"
           style="flex:1;min-width:220px;padding:10px 14px;border-radius:11px;background:var(--bg-soft);border:1px solid var(--line);color:var(--ink);font-size:.9rem">
-        <span style="color:var(--ink-soft);font-size:.8rem">${DB.journal.length} entrée(s)${DB.journal.length>300?` — 300 plus récentes affichées`:''}</span>
+        <span style="color:var(--ink-soft);font-size:.8rem">${DB.journal.length} entrée(s)${DB.journal.length>900?` — le journal n'affiche que les 900 éléments les plus récents (l'export CSV, lui, contient tout)`:''}</span>
       </div>
       <div class="table-card journal-scroll" style="overflow:auto">
         <table>
@@ -2655,8 +2739,11 @@ const App = {
     const b = document.getElementById("btnDoReset");
     if (b) { b.disabled = false; b.style.opacity = "1"; }
   },
-  _performReset() {
-    localStorage.removeItem(STORE_KEY); DB=null; loadDB();
+  async _performReset() {
+    try { localStorage.removeItem(STORE_KEY); } catch(_){}
+    try { await idbSet(null); } catch(_){}   // vide aussi IndexedDB
+    DB = null;
+    await loadDB();                           // réinitialise une base vierge
     closeModal();
     toast("Toutes les données ont été effacées.", "ok");
     this.session = null; this.showBadge();
@@ -3204,8 +3291,23 @@ function fusionnerPlanning(planningExcel) {
       });
       // on garde l'existant tel quel (déjà copié à l'étape 1)
     } else {
-      // jour non figé (futur ou non encore pointé) : on applique l'Excel
-      fusion[d] = planningExcel[d];
+      // jour non figé (futur ou non encore clôturé) : on applique l'Excel,
+      // MAIS on préserve le créneau de toute personne ayant DÉJÀ POINTÉ ce jour-là
+      // (sinon un import qui ne contient pas cette personne effacerait son créneau du jour en cours).
+      const nouveau = Object.assign({}, planningExcel[d] || {});
+      const ancien = DB.planning[d] || {};
+      const pointes = new Set(DB.pointages.filter(p=>p.date===d).map(p=>p.empId));
+      Object.keys(ancien).forEach(id=>{
+        if (pointes.has(id)) {
+          if (lbl(ancien[id]) !== lbl(nouveau[id])) {
+            conflits++;
+            logAction("Système", "Créneau protégé (déjà pointé)",
+              `${emp(id)?.nom||id} — ${d} : a déjà pointé, l'import proposait ${lbl(nouveau[id])} → créneau conservé (${lbl(ancien[id])})`);
+          }
+          nouveau[id] = ancien[id]; // on conserve le créneau existant de la personne ayant pointé
+        }
+      });
+      fusion[d] = nouveau;
       appliques++;
     }
   });
@@ -3380,16 +3482,18 @@ function tickClock(){
 /* ====================================================================
    DÉMARRAGE
    ==================================================================== */
-loadDB();
-// RÈGLE 3 : au démarrage, clôturer les départs oubliés des journées déjà écoulées
-cloturerJoursEcoules(App.currentDate);
-tickClock(); setInterval(tickClock,1000);
-// Au réveil de la tablette / retour sur l'onglet, recaler immédiatement le jour
-document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) tickClock(); });
-window.addEventListener("focus", tickClock);
-App.showBadge();
-// Rappel de sauvegarde mensuelle : on note au journal si elle est due
-try{ App.verifierRappelSauvegarde(); }catch(e){}
+(async function demarrer(){
+  await loadDB();   // charge depuis IndexedDB (avec migration de l'ancien localStorage si besoin)
+  // RÈGLE 3 : au démarrage, clôturer les départs oubliés des journées déjà écoulées
+  cloturerJoursEcoules(App.currentDate);
+  tickClock(); setInterval(tickClock,1000);
+  // Au réveil de la tablette / retour sur l'onglet, recaler immédiatement le jour
+  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) tickClock(); });
+  window.addEventListener("focus", tickClock);
+  App.showBadge();
+  // Rappel de sauvegarde mensuelle : on note au journal si elle est due
+  try{ App.verifierRappelSauvegarde(); }catch(e){}
+})();
 </script>
 </body>
 </html>
