@@ -736,11 +736,18 @@ function pauseAutoActifMaintenant(empId) {
 /* Durée réelle travaillée (minutes) = présence − forfait pause repas (30 min par service,
    SAUF pour les services marqués "travaillés" par le manager/la direction). */
 function tempsTravailleMin(paires, empId, dateISO) {
+  const prevu = (empId && dateISO) ? getPrevu(empId, dateISO) : null;
   let total = 0;
   paires.forEach((p, idx)=>{
     if (p.in && p.out) {
       let a = hmToMin(p.in), b = hmToMin(p.out);
-      if (b < a) b += 1440; // créneau après minuit (mais heure identique = 0, pas 24 h)
+      if (b < a) b += 1440; // créneau après minuit (heure identique = 0, pas 24 h)
+      // Arrivée EN AVANCE non comptée : le décompte démarre au plus tôt à l'heure prévue.
+      const cr = prevu && prevu.creneaux ? prevu.creneaux[idx] : null;
+      if (cr && cr.debut) {
+        const planA = hmToMin(cr.debut);
+        if (planA > a && planA <= b) a = planA; // surplus avant l'heure prévue ignoré
+      }
       let dur = b - a;
       // forfait : 30 min déduites par service, sauf si la pause est marquée "travaillée"
       if (empId && dateISO && !pauseTravaillee(empId, dateISO, idx)) {
@@ -1856,6 +1863,7 @@ const App = {
 
     const tsOf = (hm)=>{ if(!hm) return null; const [h,m]=hm.split(":").map(Number); const [y,mo,d]=date.split("-").map(Number); return new Date(y,mo-1,d,h,m).getTime(); };
     const now = Date.now();
+    const prevu = getPrevu(empId, date);
 
     // collecte des services saisis
     const services = [];
@@ -1867,11 +1875,22 @@ const App = {
     // validations PAR SERVICE
     for (let i=0;i<services.length;i++){
       const s = services[i], lbl = nb>1?`Service ${i+1} — `:"";
+      const crPrevu = prevu && prevu.creneaux ? prevu.creneaux[i] : null;
+      const planAin = crPrevu && crPrevu.debut ? tsOf(crPrevu.debut) : null;
       // RÈGLE 1 : pas d'heure dans le futur
       if (s.in && tsOf(s.in) > now+60000) { toast(`${lbl}arrivée : heure dans le futur impossible.`, "err"); return; }
       if (s.out && tsOf(s.out) > now+60000) { toast(`${lbl}départ : heure dans le futur impossible.`, "err"); return; }
-      // RÈGLE 2 : pour un service EXISTANT, l'arrivée ne peut qu'être retardée, le départ qu'avancé
-      if (s.old && s.old.in && s.in && tsOf(s.in) < tsOf(s.old.in)-60000) { toast(`${lbl}l'arrivée ne peut être que retardée (anti-ajout d'heures).`, "err"); return; }
+      // RÈGLE 2 — ARRIVÉE : on autorise le RATTRAPAGE d'un oubli (l'arrivée peut être avancée),
+      //   mais JAMAIS avant l'heure prévue. Pour un profil sans horaire prévu (renfort/extra),
+      //   on garde l'ancienne règle : l'arrivée ne peut qu'être retardée.
+      if (s.in) {
+        if (planAin !== null) {
+          if (tsOf(s.in) < planAin - 60000) { toast(`${lbl}l'arrivée ne peut pas être placée avant l'heure prévue (${crPrevu.debut}).`, "err"); return; }
+        } else if (s.old && s.old.in && tsOf(s.in) < tsOf(s.old.in)-60000) {
+          toast(`${lbl}l'arrivée ne peut être que retardée (anti-ajout d'heures).`, "err"); return;
+        }
+      }
+      // DÉPART : ne peut qu'être avancé (inchangé)
       if (s.old && s.old.out && s.out && tsOf(s.out) > tsOf(s.old.out)+60000) { toast(`${lbl}le départ ne peut être qu'avancé (anti-ajout d'heures).`, "err"); return; }
       // RÈGLE 3 : arrivée et départ ne peuvent pas être à la même heure (durée nulle / +24 h)
       if (s.in && s.out && s.in === s.out) { toast(`${lbl}arrivée et départ identiques : corrigez les heures.`, "err"); return; }
