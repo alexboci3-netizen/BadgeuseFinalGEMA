@@ -2517,9 +2517,9 @@ const App = {
       </div>
 
       <div class="row">
-        <button class="btn btn-primary" onclick="App.exportPointages()">💾 Exporter les pointages (CSV)</button>
+        <button class="btn btn-primary" onclick="App.choisirSalariesExport('pointages')">💾 Exporter les pointages (CSV)</button>
         <button class="btn btn-ghost" onclick="App.exportJournal()">📝 Exporter le journal (CSV)</button>
-        <button class="btn btn-ghost" onclick="App.exporterSignaturesAudit()">🖊️ Signatures pour audit (HTML)</button>
+        <button class="btn btn-ghost" onclick="App.choisirSalariesExport('signatures')">🖊️ Signatures pour audit (HTML)</button>
       </div>
       <p style="color:var(--ink-soft);font-size:.82rem;margin-top:10px">Le CSV ne peut pas afficher les images : pour <b>voir</b> les signatures lors d'un audit, utilisez l'export <b>« Signatures pour audit (HTML) »</b> — il affiche chaque signature en image, et s'imprime en PDF.</p>
 
@@ -2664,7 +2664,8 @@ const App = {
     closeModal();
     toast("Restauration annulée.", "ok");
   },
-  exportPointages() {
+  exportPointages(ids) {
+    const idsSet = (ids && ids.length) ? new Set(ids) : null;
     let csv = "Date;Salarié;Rôle;Service n°;Prévu début;Prévu fin;Arrivée réelle;Départ réel;Pause repas;Temps travaillé jour;Ponctualité jour (min);Modifié par;Commentaire comportement\n";
     const csvCom = (d,id)=>{ const c = DB.commentaires && DB.commentaires[d] && DB.commentaires[d][id] && DB.commentaires[d][id].texte;
       return c ? '"'+String(c).replace(/"/g,'""').replace(/[\r\n]+/g,' ')+'"' : ''; };
@@ -2673,7 +2674,9 @@ const App = {
     dates.forEach(d=>{
       prevusDuJour(d).concat([...new Set(DB.pointages.filter(p=>p.date===d).map(p=>p.empId))])
         .concat(DB.commentaires[d]?Object.keys(DB.commentaires[d]):[])
-        .filter((v,i,a)=>a.indexOf(v)===i).forEach(id=>{
+        .filter((v,i,a)=>a.indexOf(v)===i)
+        .filter(id=> !idsSet || idsSet.has(id))
+        .forEach(id=>{
         const e = emp(id); if(!e) return;
         const paires = pairesJour(id, d);
         if(!paires.length){
@@ -2706,18 +2709,57 @@ const App = {
         });
       });
     });
-    const suffixe = (this.expFrom||this.expTo) ? `_${this.expFrom||"debut"}_au_${this.expTo||"fin"}` : "_tout";
+    const suffixe = ((this.expFrom||this.expTo) ? `_${this.expFrom||"debut"}_au_${this.expTo||"fin"}` : "_tout") + this._suffixeSalaries(idsSet);
     downloadFile(csv, `pointages${suffixe}_${todayISO()}.csv`, "text/csv");
-    toast(nbLignes ? `Export généré : ${nbLignes} ligne(s).` : "Export généré (aucune donnée dans la plage choisie).", "ok");
+    toast(nbLignes ? `Export généré : ${nbLignes} ligne(s).` : "Export généré (aucune donnée pour la sélection).", "ok");
+  },
+  /* Suffixe de nom de fichier selon les salariés sélectionnés */
+  _suffixeSalaries(idsSet) {
+    if (!idsSet) return "";
+    if (idsSet.size === 1) { const e = emp([...idsSet][0]); return "_" + (e ? e.nom.replace(/[^A-Za-z0-9]+/g,"-") : "1-salarie"); }
+    return `_${idsSet.size}-salaries`;
+  },
+  /* Popup de sélection des salariés à exporter (sur la plage déjà choisie) */
+  choisirSalariesExport(type) {
+    const list = [...DB.team].sort((a,b)=> a.nom.localeCompare(b.nom,"fr"));
+    if (!list.length) { toast("Aucun salarié.", "err"); return; }
+    const rows = list.map(e=>`
+      <label style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--line);cursor:pointer">
+        <input type="checkbox" class="expChk" value="${e.id}" checked style="width:18px;height:18px;flex:none">
+        <span style="flex:1">${e.nom}${e.archived?' <span style="color:var(--ink-soft);font-size:.78rem">(archivé)</span>':''}<span style="color:var(--ink-soft);font-size:.78rem"> · ${e.role}</span></span>
+      </label>`).join("");
+    const plage = (this.expFrom||this.expTo) ? `${this.expFrom||"début"} → ${this.expTo||"fin"}` : "tout l'historique";
+    const titre = type==="signatures" ? "🖊️ Signatures pour audit" : "💾 Export des pointages (CSV)";
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>${titre}</h3>
+      <div class="modal-sub">Période : <b>${plage}</b>. Cochez les salariés à inclure (tout coché = tout le monde).</div>
+      <div class="row mb" style="gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.expChk').forEach(c=>c.checked=true)">Tout cocher</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.expChk').forEach(c=>c.checked=false)">Tout décocher</button>
+      </div>
+      <div class="table-card" style="max-height:46vh;overflow:auto;padding:4px 12px">${rows}</div>
+      <div class="row mt">
+        <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="App._lancerExportFiltre('${type}')">Exporter</button>
+      </div>`);
+  },
+  _lancerExportFiltre(type) {
+    const ids = [...document.querySelectorAll(".expChk")].filter(c=>c.checked).map(c=>c.value);
+    if (!ids.length) { toast("Sélectionnez au moins un salarié.", "err"); return; }
+    closeModal();
+    if (type==="signatures") this.exporterSignaturesAudit(ids);
+    else this.exportPointages(ids);
   },
   /* Export HTML des signatures pour audit : un tableau (type CSV) avec la signature
      AFFICHÉE EN IMAGE. Ouvrable dans tout navigateur, imprimable en PDF. */
-  exporterSignaturesAudit() {
+  exporterSignaturesAudit(ids) {
+    const idsSet = (ids && ids.length) ? new Set(ids) : null;
     const esc = s => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
     const ptg = DB.pointages
-      .filter(p => p.signature && this._dansPlage(p.date))
+      .filter(p => p.signature && this._dansPlage(p.date) && (!idsSet || idsSet.has(p.empId)))
       .sort((a,b)=> a.date===b.date ? (a.ts-b.ts) : (a.date<b.date?-1:1));
-    if (!ptg.length) { toast("Aucune signature à exporter sur cette période.", "err"); return; }
+    if (!ptg.length) { toast("Aucune signature à exporter pour cette sélection.", "err"); return; }
     const lignes = ptg.map(p=>{
       const e = emp(p.empId);
       const type = p.type==="in" ? "Arrivée" : (p.type==="out" ? "Départ" : esc(p.type));
@@ -2756,9 +2798,9 @@ const App = {
     <tbody>${lignes}</tbody>
   </table>
 </body></html>`;
-    const suffixe = (this.expFrom||this.expTo) ? `_${this.expFrom||"debut"}_au_${this.expTo||"fin"}` : "_tout";
+    const suffixe = ((this.expFrom||this.expTo) ? `_${this.expFrom||"debut"}_au_${this.expTo||"fin"}` : "_tout") + this._suffixeSalaries(idsSet);
     downloadFile(html, `signatures_audit${suffixe}_${todayISO()}.html`, "text/html");
-    logAction(this.session?emp(this.session.empId).nom:"?", "Export signatures (audit)", `${ptg.length} signature(s) — période : ${plage}`);
+    logAction(this.session?emp(this.session.empId).nom:"?", "Export signatures (audit)", `${ptg.length} signature(s)${idsSet?` — ${idsSet.size} salarié(s)`:""} — période : ${plage}`);
     toast(`Export signatures généré : ${ptg.length} signature(s).`, "ok");
   },
   exportJournal() {
