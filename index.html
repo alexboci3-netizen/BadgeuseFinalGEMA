@@ -328,6 +328,11 @@ const CODE_HORAIRES = {
 };
 const TOLERANCE_MIN = 5;
 const PAUSE_REPAS_MIN = 30; // seuil d'alerte (rouge) pour la pause repas
+/* Durée maximale plausible d'UN service (minutes). Au-delà, c'est presque
+   toujours une saisie incohérente (ex. départ avant arrivée mal corrigé) :
+   on refuse de compter une durée aberrante (~23 h) issue d'un passage minuit
+   appliqué à tort. 16 h couvre largement les services de nuit légitimes. */
+const MAX_SERVICE_MIN = 16 * 60;
 
 /* ====================================================================
    GESTION SOUPLE DES SALARIÉS
@@ -349,6 +354,58 @@ function estNomValide(v) {
   if (/^[\d\s.,:%-]+$/.test(s)) return false;      // que des chiffres/ponctuation
   if (!/[A-Za-zÀ-ÿ]/.test(s)) return false;        // aucune lettre
   return true;
+}
+/* ====================================================================
+   COMPARAISON DE NOMS (anti-doublon à l'import)
+   normNom : clé de comparaison robuste — minuscules, sans accents,
+   espace insécable -> espace, ponctuation -> espace, espaces multiples réduits.
+   ==================================================================== */
+function normNom(s) {
+  let t = String(s == null ? "" : s);
+  // espace insécable + variantes -> espace simple
+  t = t.replace(/[\u00A0\u202F\u2007\u2009]/g, " ");
+  // retirer les accents (NFD + suppression des diacritiques)
+  try { t = t.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch(_) {}
+  t = t.toLowerCase();
+  t = t.replace(/[^a-z0-9]+/g, " "); // toute ponctuation / tiret -> espace
+  return t.trim().replace(/\s+/g, " ");
+}
+/* Distance de Levenshtein (petites chaînes) */
+function levenshtein(a, b) {
+  a = a || ""; b = b || "";
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({length:n+1}, (_,i)=>i), cur = new Array(n+1);
+  for (let i=1;i<=m;i++){
+    cur[0]=i;
+    for (let j=1;j<=n;j++){
+      const cost = a[i-1]===b[j-1] ? 0 : 1;
+      cur[j] = Math.min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost);
+    }
+    [prev,cur] = [cur,prev];
+  }
+  return prev[n];
+}
+/* Verdict de comparaison entre deux noms :
+   "exact"  : identiques à la casse/espaces près (comportement historique = pas de question)
+   "proche" : se ressemblent fortement (accents, ordre des mots, faute de frappe) -> à arbitrer
+   "diff"   : sans rapport */
+function comparerNoms(a, b) {
+  // "exact" = ce que matchEmp rattache automatiquement (minuscules + trim des bords,
+  //   espaces internes CONSERVÉS). Tout le reste qui se ressemble devient "proche"
+  //   afin d'être arbitré, y compris un espace insécable ou un double espace que
+  //   matchEmp ne rattacherait pas (et qui finirait sinon en doublon).
+  const ra = String(a||"").trim().toLowerCase();
+  const rb = String(b||"").trim().toLowerCase();
+  if (ra === rb) return "exact";
+  const na = normNom(a), nb = normNom(b);
+  if (!na || !nb) return "diff";
+  if (na === nb) return "proche";                         // accents / NBSP / ponctuation / espaces
+  if (na.split(" ").sort().join(" ") === nb.split(" ").sort().join(" ")) return "proche"; // mêmes mots, ordre inversé
+  if (na.replace(/ /g,"") === nb.replace(/ /g,"")) return "proche"; // espace en trop / manquant
+  const d = levenshtein(na, nb), L = Math.max(na.length, nb.length);
+  if (d <= 2 && d / L <= 0.34) return "proche";           // faute de frappe légère
+  return "diff";
 }
 /* Déduit le niveau d'accès à partir du libellé de poste de la Fiche Personnel */
 function accesDepuisPoste(poste) {
@@ -664,8 +721,13 @@ function calcSoldeCreneau(prevuDebut, prevuFin, reelIn, reelOut) {
   if (!prevuDebut || !prevuFin || !reelIn || !reelOut) return null;
   let pD = hmToMin(prevuDebut), pF = hmToMin(prevuFin);
   let rD = hmToMin(reelIn),     rF = hmToMin(reelOut);
-  if (pF <= pD) pF += 1440; // fin après minuit
-  if (rF <= rD) rF += 1440;
+  const prevuOvernight = pF <= pD;       // service de nuit prévu (fin après minuit)
+  if (prevuOvernight) pF += 1440;
+  if (rF <= rD) {
+    // départ réel avant arrivée : légitime UNIQUEMENT si le service prévu passe minuit.
+    // Sinon, c'est une saisie incohérente -> pas de solde (évite un retard/bonus aberrant).
+    if (prevuOvernight) rF += 1440; else return null;
+  }
   let dArr = pD - rD;   // arrivé avant le prévu => positif (bon)
   let dDep = rF - pF;   // parti après le prévu => positif (bon)
   if (Math.abs(dArr) <= TOLERANCE_MIN) dArr = 0;
@@ -694,8 +756,9 @@ function tempsPauseMin(empId, dateISO) {
   pausesJour(empId, dateISO).forEach(p=>{
     if (p.debut && p.fin) {
       let a = hmToMin(p.debut), b = hmToMin(p.fin);
-      if (b < a) b += 1440;
-      total += (b - a);
+      if (b < a) b += 1440; // pause à cheval sur minuit (service de nuit)
+      const dur = b - a;
+      if (dur >= 0 && dur <= 8*60) total += dur; // ignore une durée aberrante (saisie incohérente)
     }
   });
   return total;
@@ -733,6 +796,36 @@ function pauseAutoActifMaintenant(empId) {
   const periods = DB.pauseAuto && DB.pauseAuto[empId];
   return !!(periods && periods.length && periods[periods.length-1].to === null);
 }
+/* Durée brute d'UN service en minutes, robuste à l'heure d'été et au passage minuit.
+   - Voie HORODATAGE RÉEL : si les deux pointages portent un ts réel cohérent
+     (out après in, durée plausible), on mesure l'écart réel (out.ts - in.ts).
+     C'est exact même lors d'un changement d'heure (été/hiver) et pour un service
+     de nuit badgé en direct (le ts du départ est bien le lendemain).
+   - Voie HORLOGE (repli) : pour les pointages reconstitués (clôture auto, édition
+     manuelle) dont le ts est fabriqué à partir de date+heure, on calcule sur HH:MM
+     avec passage minuit CONDITIONNEL : on n'ajoute 24 h que si le créneau PRÉVU
+     passe minuit, ou s'il n'y a pas de prévu (renfort/extra). Un départ avant
+     l'arrivée sur un service de jour normal = saisie incohérente -> durée nulle.
+   - Dans tous les cas, une durée > MAX_SERVICE_MIN est jugée aberrante -> 0. */
+function dureeServiceMin(p, cr) {
+  if (!p || !p.in || !p.out) return 0;
+  const tIn  = p.inP  && typeof p.inP.ts  === "number" ? p.inP.ts  : null;
+  const tOut = p.outP && typeof p.outP.ts === "number" ? p.outP.ts : null;
+  if (tIn !== null && tOut !== null && tOut > tIn) {
+    const min = Math.round((tOut - tIn) / 60000);
+    if (min >= 0 && min <= MAX_SERVICE_MIN) return min; // mesure réelle fiable
+    // sinon (ts incohérent / fabriqué) : on bascule sur la voie horloge ci-dessous
+  }
+  let a = hmToMin(p.in), b = hmToMin(p.out);
+  if (b < a) {
+    const overnightPrevu  = cr && cr.debut && cr.fin && hmToMin(cr.fin) <= hmToMin(cr.debut);
+    const overnightSansPrevu = !cr; // renfort/extra sans horaire : passage minuit autorisé
+    if (overnightPrevu || overnightSansPrevu) b += 1440;
+    else return 0; // jour normal + départ avant arrivée = incohérent
+  }
+  const dur = b - a;
+  return (dur >= 0 && dur <= MAX_SERVICE_MIN) ? dur : 0;
+}
 /* Durée réelle travaillée (minutes) = présence − forfait pause repas (30 min par service,
    SAUF pour les services marqués "travaillés" par le manager/la direction). */
 function tempsTravailleMin(paires, empId, dateISO) {
@@ -740,31 +833,36 @@ function tempsTravailleMin(paires, empId, dateISO) {
   let total = 0;
   paires.forEach((p, idx)=>{
     if (p.in && p.out) {
-      let a = hmToMin(p.in), b = hmToMin(p.out);
-      if (b < a) b += 1440; // créneau après minuit (heure identique = 0, pas 24 h)
-      // Arrivée EN AVANCE non comptée : le décompte démarre au plus tôt à l'heure prévue.
       const cr = prevu && prevu.creneaux ? prevu.creneaux[idx] : null;
+      let dur = dureeServiceMin(p, cr); // gère heure d'été + passage minuit + aberrations
+      if (dur <= 0) return;
+      // Arrivée EN AVANCE non comptée : le décompte démarre au plus tôt à l'heure prévue.
       if (cr && cr.debut) {
-        const planA = hmToMin(cr.debut);
-        if (planA > a && planA <= b) a = planA; // surplus avant l'heure prévue ignoré
+        const aWall  = hmToMin(p.in);
+        let   bWall  = hmToMin(p.out); if (bWall < aWall) bWall += 1440;
+        const planA  = hmToMin(cr.debut);
+        if (planA > aWall && planA <= bWall) {
+          dur -= Math.min(planA - aWall, dur); // surplus avant l'heure prévue ignoré
+        }
       }
-      let dur = b - a;
       // forfait : 30 min déduites par service, sauf si la pause est marquée "travaillée"
       if (empId && dateISO && !pauseTravaillee(empId, dateISO, idx)) {
         dur -= Math.min(PAUSE_REPAS_MIN, dur);
       }
-      total += dur;
+      total += Math.max(0, dur);
     }
   });
   return Math.max(0, total);
 }
 /* Nombre de minutes de pause repas déduites sur la journée (pour affichage) */
 function pauseForfaitMin(empId, dateISO) {
+  const prevu = getPrevu(empId, dateISO);
   let ded = 0;
   pairesJour(empId, dateISO).forEach((p, idx)=>{
     if (p.in && p.out && !pauseTravaillee(empId, dateISO, idx)) {
-      let a = hmToMin(p.in), b = hmToMin(p.out); if (b<a) b+=1440;
-      ded += Math.min(PAUSE_REPAS_MIN, b-a);
+      const cr = prevu && prevu.creneaux ? prevu.creneaux[idx] : null;
+      const dur = dureeServiceMin(p, cr);
+      if (dur > 0) ded += Math.min(PAUSE_REPAS_MIN, dur);
     }
   });
   return ded;
@@ -1828,6 +1926,7 @@ const App = {
       const pr = prevu && prevu.creneaux ? prevu.creneaux[i] : null;
       const pa = paires[i];
       const titre = nb>1 ? `Service ${i+1}` : "Horaire";
+      const departAuto = !!(pa && pa.outP && pa.outP.auto);
       blocks += `
         <div style="border:1px solid var(--line);border-radius:12px;padding:12px 12px 2px;margin-bottom:10px">
           <div style="font-weight:600;font-size:.85rem;margin-bottom:6px">${titre}${pr?` <span style="color:var(--ink-dim);font-weight:400">· prévu ${pr.debut}–${pr.fin}</span>`:''}</div>
@@ -1837,6 +1936,7 @@ const App = {
             <label class="field" style="flex:1;min-width:120px"><span>Départ</span>
               <input type="time" id="edOut${i}" value="${pa?(pa.out||''):''}"></label>
           </div>
+          ${departAuto?`<div style="font-size:.74rem;color:var(--accent);margin:0 0 8px;line-height:1.45">⚠️ Départ <b>complété automatiquement</b> à la fin prévue (oubli de pointage). Vous pouvez le <b>rallonger</b> jusqu'à l'heure réelle de sortie pour compter les heures supplémentaires.</div>`:''}
         </div>`;
     }
     openModal(`
@@ -1847,7 +1947,7 @@ const App = {
       <label class="field"><span>Commentaire (obligatoire) — motif précis de la modification</span>
         <textarea id="edComment" placeholder="Ex. : oubli de pointage le midi, badgé manuellement après vérification"></textarea></label>
       <p style="font-size:.76rem;color:var(--ink-dim);margin:-6px 0 14px;line-height:1.5">
-        ⚠️ Règles : pas d'heure dans le futur · pour un service existant, l'arrivée ne peut qu'être <b>retardée</b>, le départ qu'<b>avancé</b> (impossible d'ajouter des heures) · laissez un service vide pour le supprimer.</p>
+        ⚠️ Règles : pas d'heure dans le futur · pour un service existant, l'arrivée ne peut qu'être <b>retardée</b>, le départ qu'<b>avancé</b> (impossible d'ajouter des heures) · <b>exception</b> : un départ complété automatiquement (oubli) peut être rallongé jusqu'à l'heure réelle de sortie · laissez un service vide pour le supprimer.</p>
       <div class="row mt">
         <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
         <button class="btn btn-primary" onclick="App.saveEditPointage('${empId}')">Enregistrer</button>
@@ -1890,10 +1990,21 @@ const App = {
           toast(`${lbl}l'arrivée ne peut être que retardée (anti-ajout d'heures).`, "err"); return;
         }
       }
-      // DÉPART : ne peut qu'être avancé (inchangé)
-      if (s.old && s.old.out && s.out && tsOf(s.out) > tsOf(s.old.out)+60000) { toast(`${lbl}le départ ne peut être qu'avancé (anti-ajout d'heures).`, "err"); return; }
+      // DÉPART : ne peut qu'être AVANCÉ (anti-ajout d'heures).
+      //   EXCEPTION : si le départ existant a été posé AUTOMATIQUEMENT (oubli clôturé à la
+      //   fin prévue), la gestion PEUT le rallonger jusqu'à l'heure réelle de sortie pour
+      //   compter les heures supplémentaires. R1 (pas d'heure future) reste appliquée plus haut,
+      //   et le plafond de durée (MAX_SERVICE_MIN) protège le décompte contre une valeur aberrante.
+      const departAuto = !!(s.old && s.old.outP && s.old.outP.auto);
+      if (s.old && s.old.out && s.out && !departAuto && tsOf(s.out) > tsOf(s.old.out)+60000) { toast(`${lbl}le départ ne peut être qu'avancé (anti-ajout d'heures).`, "err"); return; }
       // RÈGLE 3 : arrivée et départ ne peuvent pas être à la même heure (durée nulle / +24 h)
       if (s.in && s.out && s.in === s.out) { toast(`${lbl}arrivée et départ identiques : corrigez les heures.`, "err"); return; }
+      // RÈGLE 4 : départ AVANT l'arrivée interdit, SAUF service de nuit prévu (fin après minuit).
+      //   Évite qu'une faute de frappe (ex. 09:00 → 08:00) soit comptée comme ~23 h via le passage minuit.
+      if (s.in && s.out && hmToMin(s.out) < hmToMin(s.in)) {
+        const overnightPrevu = crPrevu && crPrevu.debut && crPrevu.fin && hmToMin(crPrevu.fin) <= hmToMin(crPrevu.debut);
+        if (!overnightPrevu) { toast(`${lbl}le départ est avant l'arrivée. Un service de nuit doit être prévu comme tel au planning (fin après minuit).`, "err"); return; }
+      }
     }
 
     // RECONSTRUCTION non destructive : on retire les in/out du jour puis on recrée service par service
@@ -2666,9 +2777,21 @@ const App = {
   },
   exportPointages(ids) {
     const idsSet = (ids && ids.length) ? new Set(ids) : null;
-    let csv = "Date;Salarié;Rôle;Service n°;Prévu début;Prévu fin;Arrivée réelle;Départ réel;Pause repas;Temps travaillé jour;Ponctualité jour (min);Modifié par;Commentaire comportement\n";
+    let csv = "Date;Salarié;Rôle;Service n°;Prévu début;Prévu fin;Arrivée réelle;Départ réel;Pause repas;Temps travaillé jour;Ponctualité jour (min);Modifié par;Motif modification (direction);Commentaire comportement\n";
     const csvCom = (d,id)=>{ const c = DB.commentaires && DB.commentaires[d] && DB.commentaires[d][id] && DB.commentaires[d][id].texte;
       return c ? '"'+String(c).replace(/"/g,'""').replace(/[\r\n]+/g,' ')+'"' : ''; };
+    // Met un champ commentaire entre guillemets (même règle que csvCom) — vide si chaîne vide
+    const csvCell = (s)=> s ? '"'+String(s).replace(/"/g,'""').replace(/[\r\n]+/g,' ')+'"' : '';
+    // Motif(s) saisi(s) par la direction lors des modifications d'horaire pour (jour, salarié),
+    // repris du JOURNAL (action « Modification horaire ») pour vérification dans Excel.
+    const motifsDirection = (d, nom)=>{
+      const prefixe = nom + " — " + d + " :";
+      const ms = (DB.journal||[])
+        .filter(x => x && x.action === "Modification horaire" && typeof x.detail === "string" && x.detail.indexOf(prefixe) === 0)
+        .map(x => { const k = x.detail.lastIndexOf("Motif : "); return k>=0 ? x.detail.slice(k+8).trim() : ""; })
+        .filter(Boolean);
+      return ms.length ? ms.join(" | ") : "";
+    };
     const dates = [...new Set([...DB.pointages.map(p=>p.date), ...Object.keys(DB.absences||{}), ...Object.keys(DB.commentaires||{})])].sort().filter(d=>this._dansPlage(d));
     let nbLignes = 0;
     dates.forEach(d=>{
@@ -2686,11 +2809,11 @@ const App = {
             const crA = prevuA && prevuA.creneaux ? prevuA.creneaux[0] : null;
             const info = DB.absences[d] && DB.absences[d][id] ? DB.absences[d][id] : {};
             const lib = (info.type==="maladie") ? "ARRÊT MALADIE" : "ABSENT";
-            csv += `${d};${e.nom};${e.role};;${crA?crA.debut:''};${crA?crA.fin:''};${lib};${lib};;0h00;0;${info.by||''};${csvCom(d,id)}\n`;
+            csv += `${d};${e.nom};${e.role};;${crA?crA.debut:''};${crA?crA.fin:''};${lib};${lib};;0h00;0;${info.by||''};;${csvCom(d,id)}\n`;
             nbLignes++;
           } else if (csvCom(d,id)) {
             // commentaire de comportement sans pointage ni absence : on l'exporte quand même
-            csv += `${d};${e.nom};${e.role};;;;;;;;;;${csvCom(d,id)}\n`;
+            csv += `${d};${e.nom};${e.role};;;;;;;;;;;${csvCom(d,id)}\n`;
             nbLignes++;
           }
           return;
@@ -2699,12 +2822,24 @@ const App = {
         const solde = calcSoldeJour(prevu, paires);
         const tt = tempsTravailleMin(paires, id, d);
         const ttLabel = tt>0 ? `${Math.floor(tt/60)}h${String(tt%60).padStart(2,'0')}` : '';
-        const comCell = csvCom(d,id);
+        const comTexte = (DB.commentaires && DB.commentaires[d] && DB.commentaires[d][id] && DB.commentaires[d][id].texte) || '';
+        const motifDir = motifsDirection(d, e.nom);
         paires.forEach((p,i)=>{
           const cr = prevu && prevu.creneaux ? prevu.creneaux[i] : null;
           const modif = (p.inP?.editedBy || p.outP?.editedBy || '');
           const pauseCol = (p.in&&p.out) ? (pauseTravaillee(id,d,i) ? "travaillée (incluse)" : "-30 min déduites") : "";
-          csv += `${d};${e.nom};${e.role};${i+1};${cr?cr.debut:''};${cr?cr.fin:''};${p.in||''};${p.out||''};${pauseCol};${i===0?ttLabel:''};${i===0&&solde!==null?solde:''};${modif};${i===0?comCell:''}\n`;
+          // FLAGS reconnaissables (repris du vocabulaire du journal) : départ clôturé
+          // automatiquement par le système, et anomalies de pointage (oubli d'arrivée/départ).
+          const flags = [];
+          if (p.outP && p.outP.auto) flags.push("Départ complété (oubli) — clôture auto à la fin prévue");
+          if (p.inP  && p.inP.auto)  flags.push("Arrivée complétée automatiquement");
+          if (p.in && !p.out) flags.push("Arrivée sans départ (service non clôturé)");
+          if (!p.in && p.out) flags.push("Départ sans arrivée (badge isolé)");
+          const parts = [];
+          if (flags.length) parts.push("[AUTO] " + flags.join(" · "));
+          if (i===0 && comTexte) parts.push(comTexte);
+          const comCol = csvCell(parts.join(" | "));
+          csv += `${d};${e.nom};${e.role};${i+1};${cr?cr.debut:''};${cr?cr.fin:''};${p.in||''};${p.out||''};${pauseCol};${i===0?ttLabel:''};${i===0&&solde!==null?solde:''};${modif};${csvCell(i===0?motifDir:'')};${comCol}\n`;
           nbLignes++;
         });
       });
@@ -2964,48 +3099,159 @@ const App = {
   async doImport() {
     const f = document.getElementById("planFile").files[0];
     if (!f) { toast("Choisissez un fichier.", "err"); return; }
+    // réinitialiser l'état d'import (au cas où un import précédent aurait été interrompu)
+    App._aliasNoms = {};
+    this._pendingRenames = [];
+    this._excludeRoster = new Set();
+    this._nouveauxSalaries = null;
     try {
       const data = await f.arrayBuffer();
-      let { planning: planningExcel, inconnues, noms, personnel } = await parseXlsxPlanning(data);
-      // CRÉATION AUTO depuis la Fiche Personnel (nom + poste), complétée par les noms des grilles
-      const roster = (personnel && personnel.length) ? personnel.slice() : [];
-      const dejaListes = new Set(roster.map(p=>p.nom.toLowerCase().trim()));
-      (noms||[]).forEach(n=>{ if(!dejaListes.has(String(n).toLowerCase().trim())){ roster.push({nom:n, poste:""}); dejaListes.add(String(n).toLowerCase().trim()); }});
+      this._importData = data; this._importName = f.name;
+      // 1re lecture : on récupère uniquement les noms (Fiche Personnel + grilles mensuelles)
+      const { personnel, noms } = await parseXlsxPlanning(data);
+      this._importPersonnel = personnel || [];
+      this._importNoms = noms || [];
+      // ARBITRAGE DES NOMS : repérer les noms Excel proches d'un salarié existant (point 3)
+      const ambigus = this._detecterNomsAmbigus(this._importPersonnel, this._importNoms);
+      if (ambigus.length) { this._popupResolutionNoms(ambigus); return; } // on attend la décision
+      await this._poursuivreImport();
+    } catch(e) {
+      console.error(e); toast("Impossible de lire ce fichier : "+e.message, "err");
+    }
+  },
+  /* Repère les noms du fichier qui RESSEMBLENT à un salarié existant sans être
+     strictement identiques. Renvoie [{excelName, poste, candidats:[{id,nom,role}]}]. */
+  _detecterNomsAmbigus(personnel, noms) {
+    const map = new Map(); // normNom -> {excelName, poste}
+    (personnel||[]).forEach(p=>{
+      const nom = String(p && p.nom || "").trim();
+      if (!estNomValide(nom)) return;
+      map.set(normNom(nom), { excelName: nom, poste: String(p&&p.poste||"").trim() });
+    });
+    (noms||[]).forEach(n=>{
+      const nom = String(n||"").trim();
+      if (!estNomValide(nom)) return;
+      const k = normNom(nom);
+      if (!map.has(k)) map.set(k, { excelName: nom, poste: "" });
+    });
+    const existants = DB.team.filter(t=>!t.archived);
+    const ambigus = [];
+    for (const { excelName, poste } of map.values()) {
+      if (existants.some(t=>comparerNoms(t.nom, excelName)==="exact")) continue; // identique -> aucune question
+      const candidats = existants.filter(t=>comparerNoms(t.nom, excelName)==="proche")
+                                 .map(t=>({ id:t.id, nom:t.nom, role:t.role||"" }));
+      if (candidats.length) ambigus.push({ excelName, poste, candidats });
+      // sinon : nom sans ressemblance -> nouveau salarié, création normale, pas de question
+    }
+    return ambigus;
+  },
+  /* Popup d'arbitrage : pour chaque nom ambigu, rattacher (en gardant l'historique)
+     ou créer un nouveau salarié ; option de renommage à l'orthographe de l'Excel. */
+  _popupResolutionNoms(ambigus) {
+    this._ambigus = ambigus;
+    const esc = s => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    const blocs = ambigus.map((a,i)=>{
+      const cands = a.candidats.map((c,ci)=>`
+        <label style="display:flex;align-items:flex-start;gap:8px;padding:6px 2px;cursor:pointer">
+          <input type="radio" name="res_${i}" value="link_${esc(c.id)}" ${ci===0?"checked":""} style="margin-top:3px">
+          <span>Rattacher à <b>${esc(c.nom)}</b> <span style="color:var(--ink-soft);font-size:.8rem">· ${esc(c.role||"—")}</span><br>
+          <span style="color:var(--ink-soft);font-size:.8rem">conserve tout son historique (pointages, PIN, planning)</span></span>
+        </label>`).join("");
+      return `
+        <div class="table-card" style="padding:12px 14px;margin-bottom:12px">
+          <div style="font-weight:600;margin-bottom:8px">Dans l'Excel : « ${esc(a.excelName)} »${a.poste?` <span style="color:var(--ink-soft);font-size:.8rem">· ${esc(a.poste)}</span>`:""}</div>
+          ${cands}
+          <label style="display:flex;align-items:flex-start;gap:8px;padding:6px 2px;cursor:pointer">
+            <input type="radio" name="res_${i}" value="new" style="margin-top:3px">
+            <span>Créer un <b>nouveau salarié</b> « ${esc(a.excelName)} » <span style="color:var(--ink-soft);font-size:.8rem">(personne différente — process normal)</span></span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:6px;padding-top:8px;border-top:1px solid var(--line);font-size:.84rem;cursor:pointer">
+            <input type="checkbox" id="rn_${i}" checked>
+            Si rattaché : <b>renommer</b> le salarié avec l'orthographe de l'Excel
+          </label>
+        </div>`;
+    }).join("");
+    openModal(`
+      <button class="modal-close" onclick="App.annulerImport()">×</button>
+      <h3>Noms à vérifier avant import — ${ambigus.length}</h3>
+      <div class="modal-sub">Des noms du fichier ressemblent à des salariés déjà présents. Pour chacun, indiquez s'il s'agit de la <b>même personne</b> (rattacher, en gardant l'historique et tous les horaires) ou d'une <b>nouvelle</b>. En rattachant, vous pouvez aligner le nom sur l'Excel.</div>
+      <div style="max-height:52vh;overflow:auto;margin:4px 0 10px">${blocs}</div>
+      <div class="row mt" style="gap:8px">
+        <button class="btn btn-ghost" onclick="App.annulerImport()">Annuler l'import</button>
+        <button class="btn btn-primary" onclick="App._validerResolutionNoms()">Valider et importer</button>
+      </div>`);
+  },
+  /* Lecture des choix d'arbitrage -> alias (rattachement) + renommages différés. */
+  _validerResolutionNoms() {
+    const ambigus = this._ambigus || [];
+    App._aliasNoms = {};
+    this._pendingRenames = [];
+    this._excludeRoster = new Set();
+    for (let i=0;i<ambigus.length;i++){
+      const a = ambigus[i];
+      const sel = document.querySelector(`input[name="res_${i}"]:checked`);
+      const val = sel ? sel.value : "new";
+      if (val.indexOf("link_")===0) {
+        const empId = val.slice(5);
+        const cand = a.candidats.find(c=>c.id===empId);
+        App._aliasNoms[normNom(a.excelName)] = empId;   // le planning se rattachera à ce salarié
+        this._excludeRoster.add(normNom(a.excelName));  // ne pas le recréer comme doublon
+        const rn = document.getElementById(`rn_${i}`);
+        if (rn && rn.checked && cand && cand.nom !== a.excelName) {
+          this._pendingRenames.push({ empId, nouveau: a.excelName, ancien: cand.nom });
+        }
+      }
+      // val === "new" : aucune action, ajouterSalaries le créera normalement
+    }
+    this._ambigus = null;
+    closeModal();
+    this._poursuivreImport();
+  },
+  /* Suite de l'import une fois les noms arbitrés : création auto (hors rattachements),
+     lecture du planning (alias pris en compte), fusion et flux de confirmation. */
+  async _poursuivreImport() {
+    const data = this._importData, name = this._importName;
+    try {
+      const exclude = this._excludeRoster || new Set();
+      // CRÉATION AUTO depuis la Fiche Personnel + grilles, en EXCLUANT les noms rattachés
+      const roster = []; const deja = new Set();
+      (this._importPersonnel||[]).forEach(p=>{
+        const nom = String(p&&p.nom||"").trim(); const k = normNom(nom);
+        if (!nom || exclude.has(k) || deja.has(k)) return;
+        roster.push({ nom, poste: String(p&&p.poste||"").trim() }); deja.add(k);
+      });
+      (this._importNoms||[]).forEach(n=>{
+        const nom = String(n||"").trim(); const k = normNom(nom);
+        if (!nom || exclude.has(k) || deja.has(k)) return;
+        roster.push({ nom, poste:"" }); deja.add(k);
+      });
       const nouveaux = ajouterSalaries(roster);
       this._nouveauxSalaries = nouveaux;
-      if (nouveaux.length) {
-        // re-lire le fichier : les nouveaux salariés existent désormais, leur planning peut se rattacher
-        ({ planning: planningExcel, inconnues } = await parseXlsxPlanning(data));
-      }
-      // Stocker les inconnues pour les afficher dans l'onglet Planning
+      // LECTURE DU PLANNING : alias + nouveaux salariés désormais résolus par matchEmp
+      const { planning: planningExcel, inconnues } = await parseXlsxPlanning(data);
       DB._dernieresInconnues = inconnues || {};
       // FUSION : protéger les jours déjà pointés/clôturés, appliquer l'Excel au reste
       const { fusion, gel, conflits, appliques } = fusionnerPlanning(planningExcel);
-      // détection des changements ; on ne traite comme "conflits à justifier" que les
-      // créneaux EXISTANTS modifiés ou supprimés (pas les simples ajouts/nouveaux jours)
       const tousChanges = detectPlanningChanges(DB.planning, fusion);
       const changes = tousChanges.filter(c => c.oldLabel !== "(rien)");
       const nbInco = Object.keys(inconnues||{}).length;
       const totInco = Object.values(inconnues||{}).reduce((a,b)=>a+b,0);
-      // détection des CHANGEMENTS DE POSTE pour les salariés existants (Fiche Personnel)
+      // CHANGEMENTS DE POSTE pour les salariés existants (y compris ceux rattachés/renommés)
       const changementsPoste = [];
-      (personnel||[]).forEach(p=>{
+      (this._importPersonnel||[]).forEach(p=>{
         const nom = String(p && p.nom || "").trim();
         const np = String(p && p.poste || "").trim();
         if (!nom || !np) return;
-        const ex = DB.team.find(t=>t.nom.toLowerCase().trim()===nom.toLowerCase() && !t.archived);
+        const aliasId = App._aliasNoms && App._aliasNoms[normNom(nom)];
+        const ex = aliasId ? DB.team.find(t=>t.id===aliasId && !t.archived)
+                           : DB.team.find(t=>t.nom.toLowerCase().trim()===nom.toLowerCase() && !t.archived);
         if (ex && np !== (ex.role||"").trim()) {
           changementsPoste.push({ empId: ex.id, nom: ex.nom, ancien: ex.role||"—", nouveau: np });
         }
       });
-      // import en attente (utilisé par les boutons des popups de confirmation)
-      this.pendingImport = { fusion, changes, changementsPoste, meta: { name:f.name, gel, conflits, appliques, nbInco, totInco } };
-      // 1) D'abord les changements de poste (s'il y en a), puis le flux des conflits de planning
-      if (changementsPoste.length) {
-        this.confirmerChangementsPoste();
-      } else {
-        this._dispatchConflits();
-      }
+      this.pendingImport = { fusion, changes, changementsPoste, meta: { name, gel, conflits, appliques, nbInco, totInco } };
+      if (changementsPoste.length) this.confirmerChangementsPoste();
+      else this._dispatchConflits();
     } catch(e) {
       console.error(e); toast("Impossible de lire ce fichier : "+e.message, "err");
     }
@@ -3138,6 +3384,11 @@ const App = {
     }
     this._nouveauxSalaries = null;
     this.pendingImport = null;
+    // nettoyer l'arbitrage des noms (aucun renommage n'a encore été appliqué : ils sont différés)
+    App._aliasNoms = {};
+    this._pendingRenames = [];
+    this._excludeRoster = new Set();
+    this._ambigus = null;
     closeModal();
     toast("Import annulé. Aucun changement appliqué.", "err");
   },
@@ -3146,9 +3397,18 @@ const App = {
     const pend = this.pendingImport;
     if (!pend) { closeModal(); return; }
     const { fusion, meta, changes } = pend;
+    const who = this.session ? emp(this.session.empId).nom : "(import direct)";
+    // 0) RENOMMAGES décidés à l'arbitrage des noms (rattachement avec orthographe Excel)
+    if (this._pendingRenames && this._pendingRenames.length) {
+      const faits = [];
+      this._pendingRenames.forEach(r=>{
+        const e = DB.team.find(t=>t.id===r.empId);
+        if (e && e.nom !== r.nouveau) { e.nom = r.nouveau; faits.push(`${r.ancien} → ${r.nouveau}`); }
+      });
+      if (faits.length) logAction(who, "Renommage à l'import (rattachement)", faits.join(" ; "));
+    }
     DB.planning = fusion; DB.lastPlanningName = meta.name; saveDB();
     const flags = rattraperImport(this.currentDate);
-    const who = this.session ? emp(this.session.empId).nom : "(import direct)";
     // 1) salariés créés (avec PIN temporaire)
     if (this._nouveauxSalaries && this._nouveauxSalaries.length) {
       const liste = this._nouveauxSalaries.map(s=>`${s.nom} (PIN ${s.pin})`).join(", ");
@@ -3172,6 +3432,8 @@ const App = {
     logAction(who, "Import planning",
       `${meta.name} — ${meta.appliques} jour(s) appliqué(s)${meta.gel?`, jours ≤ ${meta.gel} protégés`:''}${meta.conflits?`, ${meta.conflits} conflit(s) ignoré(s)`:''}${flags?` · ${flags} absence(s) à vérifier`:''}${meta.nbInco?` · ${meta.totInco} case(s) non reconnue(s)`:''}`);
     this.pendingImport = null;
+    // nettoyage de l'état d'arbitrage (les renommages sont désormais appliqués)
+    App._aliasNoms = {}; this._pendingRenames = []; this._excludeRoster = new Set();
     closeModal();
     let msg = "Planning importé.";
     const nbNew = (this._nouveauxSalaries||[]).length;
@@ -3263,6 +3525,10 @@ async function parseXlsxPlanning(arrayBuffer) {
 
   // map nom -> empId de notre équipe
   function matchEmp(nom) {
+    // 1) alias résolus à l'import (un nom Excel rattaché manuellement à un salarié existant)
+    const alias = App._aliasNoms && App._aliasNoms[normNom(nom)];
+    if (alias && DB.team.some(t=>t.id===alias && !t.archived)) return alias;
+    // 2) correspondance exacte (casse/espaces près) — comportement historique
     const e = DB.team.find(t=>t.nom.toLowerCase()===String(nom).toLowerCase().trim() && !t.archived);
     return e?e.id:null;
   }
