@@ -4,6 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Badgeuse — Restaurant 2026</title>
+<!-- Installation iPad (ecran d'accueil) + fonctionnement HORS-LIGNE -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Badgeuse">
 <style>
   /* ============ POLICES & VARIABLES ============ */
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Outfit:wght@300;400;500;600;700&display=swap');
@@ -258,6 +263,7 @@
 </style>
 <!-- SDK EmailJS (notification mail). Si pas d'internet, l'app bascule sur le mail pré-rempli. -->
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
   <div class="topbar">
@@ -836,8 +842,11 @@ function tempsTravailleMin(paires, empId, dateISO) {
       const cr = prevu && prevu.creneaux ? prevu.creneaux[idx] : null;
       let dur = dureeServiceMin(p, cr); // gère heure d'été + passage minuit + aberrations
       if (dur <= 0) return;
-      // Arrivée EN AVANCE non comptée : le décompte démarre au plus tôt à l'heure prévue.
-      if (cr && cr.debut) {
+      // Arrivée EN AVANCE : normalement non comptée (le décompte démarre au plus tôt à l'heure
+      // prévue). EXCEPTION : si l'arrivée a été AJUSTÉE par la direction dans l'espace gestion
+      // (p.inP.editedBy), la correction est autorisée et l'heure ajustée est comptée telle quelle.
+      const arriveeAjustee = !!(p.inP && p.inP.editedBy);
+      if (cr && cr.debut && !arriveeAjustee) {
         const aWall  = hmToMin(p.in);
         let   bWall  = hmToMin(p.out); if (bWall < aWall) bWall += 1440;
         const planA  = hmToMin(cr.debut);
@@ -1627,6 +1636,7 @@ const App = {
         <button class="tab ${this.adminTab==='pins'?'active':''}" onclick="App.setTab('pins')">🔑 Salariés &amp; PIN</button>
         <button class="tab ${this.adminTab==='journal'?'active':''}" onclick="App.setTab('journal')">📝 Journal</button>
         <button class="tab ${this.adminTab==='export'?'active':''}" onclick="App.setTab('export')">💾 Export</button>
+        <button class="tab ${this.adminTab==='sync'?'active':''}" onclick="App.setTab('sync')">☁️ Synchro</button>
         ${isDir?`<button class="tab ${this.adminTab==='params'?'active':''}" onclick="App.setTab('params')">⚙️ Paramètres</button>`:''}
       </div>
       <div id="adminContent"></div>
@@ -1646,6 +1656,7 @@ const App = {
     if (this.adminTab==="pins")    return this.tabPins(c);
     if (this.adminTab==="journal") return this.tabJournal(c);
     if (this.adminTab==="export")  return this.tabExport(c);
+    if (this.adminTab==="sync")    return Cloud.open(c);
     if (this.adminTab==="params")  return this.session.access==="dirigeant" ? this.tabParams(c) : this.tabJour(c);
   },
 
@@ -1947,7 +1958,7 @@ const App = {
       <label class="field"><span>Commentaire (obligatoire) — motif précis de la modification</span>
         <textarea id="edComment" placeholder="Ex. : oubli de pointage le midi, badgé manuellement après vérification"></textarea></label>
       <p style="font-size:.76rem;color:var(--ink-dim);margin:-6px 0 14px;line-height:1.5">
-        ⚠️ Règles : pas d'heure dans le futur · pour un service existant, l'arrivée ne peut qu'être <b>retardée</b>, le départ qu'<b>avancé</b> (impossible d'ajouter des heures) · <b>exception</b> : un départ complété automatiquement (oubli) peut être rallongé jusqu'à l'heure réelle de sortie · laissez un service vide pour le supprimer.</p>
+        ⚠️ Règles : pas d'heure dans le futur · l'arrivée peut être placée à l'heure réelle, même <b>avant</b> l'heure prévue (le temps compté démarre au plus tôt à l'heure prévue) · le départ ne peut qu'être <b>avancé</b> (impossible d'ajouter des heures) · <b>exception</b> : un départ complété automatiquement (oubli) peut être rallongé jusqu'à l'heure réelle de sortie · pour un renfort <b>sans horaire prévu</b>, l'arrivée ne peut qu'être retardée · laissez un service vide pour le supprimer.</p>
       <div class="row mt">
         <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
         <button class="btn btn-primary" onclick="App.saveEditPointage('${empId}')">Enregistrer</button>
@@ -1980,14 +1991,14 @@ const App = {
       // RÈGLE 1 : pas d'heure dans le futur
       if (s.in && tsOf(s.in) > now+60000) { toast(`${lbl}arrivée : heure dans le futur impossible.`, "err"); return; }
       if (s.out && tsOf(s.out) > now+60000) { toast(`${lbl}départ : heure dans le futur impossible.`, "err"); return; }
-      // RÈGLE 2 — ARRIVÉE : on autorise le RATTRAPAGE d'un oubli (l'arrivée peut être avancée),
-      //   mais JAMAIS avant l'heure prévue. Pour un profil sans horaire prévu (renfort/extra),
-      //   on garde l'ancienne règle : l'arrivée ne peut qu'être retardée.
+      // RÈGLE 2 — ARRIVÉE : la gestion peut placer l'arrivée à l'heure RÉELLE, même AVANT
+      //   l'heure prévue. Le temps travaillé démarre de toute façon au plus tôt à l'heure
+      //   prévue (voir tempsTravailleMin) : enregistrer une arrivée en avance n'ajoute donc
+      //   aucune heure. Pour un profil SANS horaire prévu (renfort/extra), il n'y a pas de
+      //   plafond, donc l'arrivée ne peut qu'être retardée (anti-ajout d'heures).
       if (s.in) {
-        if (planAin !== null) {
-          if (tsOf(s.in) < planAin - 60000) { toast(`${lbl}l'arrivée ne peut pas être placée avant l'heure prévue (${crPrevu.debut}).`, "err"); return; }
-        } else if (s.old && s.old.in && tsOf(s.in) < tsOf(s.old.in)-60000) {
-          toast(`${lbl}l'arrivée ne peut être que retardée (anti-ajout d'heures).`, "err"); return;
+        if (planAin === null && s.old && s.old.in && tsOf(s.in) < tsOf(s.old.in)-60000) {
+          toast(`${lbl}sans horaire prévu, l'arrivée ne peut être que retardée (anti-ajout d'heures).`, "err"); return;
         }
       }
       // DÉPART : ne peut qu'être AVANCÉ (anti-ajout d'heures).
@@ -3874,6 +3885,169 @@ function tickClock(){
   // Rappel de sauvegarde mensuelle : on note au journal si elle est due
   try{ App.verifierRappelSauvegarde(); }catch(e){}
 })();
+</script>
+<script>
+/* ====================================================================
+   SYNCHRONISATION EN LIGNE (Supabase) — sauvegarde miroir + consultation
+   a distance. Le POINTAGE reste 100% local et hors-ligne : la synchro est
+   un PLUS, jamais un blocage. Modele choisi : la TABLETTE envoie, les autres
+   appareils CONSULTENT en lecture seule.
+   ==================================================================== */
+const CLOUD_URL = "https://rvjueqekvsscroozcxzf.supabase.co";
+const CLOUD_KEY = "sb_publishable_wEejCaSBq-uAcqFsmQ4z6w_x_wBwZh2";
+const CLOUD_ROW = "DB";
+
+const Cloud = {
+  _sb: null,
+  _user: null,
+  _panelEl: null,
+
+  client() {
+    if (this._sb) return this._sb;
+    if (!window.supabase || !window.supabase.createClient) return null;
+    try { this._sb = window.supabase.createClient(CLOUD_URL, CLOUD_KEY); }
+    catch (e) { return null; }
+    return this._sb;
+  },
+
+  getRole() { try { return localStorage.getItem("cloud_role") || "lecture"; } catch (e) { return "lecture"; } },
+  setRole(r) { try { localStorage.setItem("cloud_role", r); } catch (e) {} this.renderPanel(); },
+  lastSync() { try { return localStorage.getItem("cloud_last_sync") || ""; } catch (e) { return ""; } },
+  _stamp() { try { localStorage.setItem("cloud_last_sync", new Date().toISOString()); } catch (e) {} },
+
+  /* Session locale (lecture dans le stockage, sans appel reseau) */
+  async _session() {
+    const sb = this.client(); if (!sb) return null;
+    try { const { data } = await sb.auth.getSession(); return data ? data.session : null; }
+    catch (e) { return null; }
+  },
+
+  /* Ouverture de l'onglet : rendu immediat puis mise a jour de l'etat connecte */
+  open(c) {
+    this._panelEl = c;
+    this.renderPanel();
+    this._session().then((s) => { this._user = s ? s.user : null; this.renderPanel(); }).catch(() => {});
+  },
+
+  async login(email, pwd) {
+    const sb = this.client();
+    if (!sb) { toast("Librairie de synchro non chargée. Ouvrez l'app une fois connecté à internet.", "err"); return; }
+    if (!email || !pwd) { toast("Renseignez l'email et le mot de passe.", "err"); return; }
+    try {
+      const { data, error } = await sb.auth.signInWithPassword({ email: email.trim(), password: pwd });
+      if (error) { toast("Connexion refusée : " + error.message, "err"); return; }
+      this._user = data.user;
+      toast("Connecté à la synchro en ligne ✓", "ok");
+      try { logAction("Synchro", "Connexion cloud", email.trim()); } catch (e) {}
+      this.renderPanel();
+    } catch (e) { toast("Erreur de connexion : " + (e.message || e), "err"); }
+  },
+
+  async logout() {
+    const sb = this.client(); if (sb) { try { await sb.auth.signOut(); } catch (e) {} }
+    this._user = null;
+    this.renderPanel();
+  },
+
+  async push() {
+    if (!navigator.onLine) { toast("Hors-ligne : impossible d'envoyer. Réessayez avec internet.", "err"); return; }
+    const sb = this.client(); if (!sb) { toast("Librairie de synchro non chargée (ouvrez l'app en ligne).", "err"); return; }
+    const s = await this._session(); if (!s) { toast("Connectez-vous d'abord à la synchro.", "err"); return; }
+    try {
+      const row = { id: CLOUD_ROW, data: DB, updated_at: new Date().toISOString(), updated_by: (s.user && s.user.email) || "tablette" };
+      const { error } = await sb.from("badgeuse").upsert(row);
+      if (error) { toast("Envoi échoué : " + error.message, "err"); return; }
+      this._stamp();
+      toast("Données envoyées en ligne ✓", "ok");
+      try { logAction("Synchro", "Envoi cloud", "Sauvegarde en ligne mise à jour"); } catch (e) {}
+      this.renderPanel();
+    } catch (e) { toast("Erreur d'envoi : " + (e.message || e), "err"); }
+  },
+
+  async pull() {
+    if (!navigator.onLine) { toast("Hors-ligne : impossible de récupérer maintenant.", "err"); return; }
+    const sb = this.client(); if (!sb) { toast("Librairie de synchro non chargée (ouvrez l'app en ligne).", "err"); return; }
+    const s = await this._session(); if (!s) { toast("Connectez-vous d'abord à la synchro.", "err"); return; }
+    if (this.getRole() === "tablette" &&
+        !confirm("Cet appareil est réglé comme TABLETTE de pointage. « Récupérer » va REMPLACER ses données locales par la version en ligne. Continuer ?")) return;
+    try {
+      const { data, error } = await sb.from("badgeuse").select("data,updated_at").eq("id", CLOUD_ROW).maybeSingle();
+      if (error) { toast("Récupération échouée : " + error.message, "err"); return; }
+      if (!data || !data.data) { toast("Aucune donnée en ligne pour l'instant (envoyez d'abord depuis la tablette).", "err"); return; }
+      DB = data.data;
+      /* garde-fous structure (evite tout plantage si un champ manque) */
+      DB.team = DB.team || []; DB.planning = DB.planning || {}; DB.renforts = DB.renforts || {};
+      DB.extras = DB.extras || {}; DB.pointages = DB.pointages || []; DB.journal = DB.journal || [];
+      DB.security = DB.security || { failCount: 0, locked: false, lockedAt: null };
+      DB.aVerifier = DB.aVerifier || {}; DB.absences = DB.absences || {}; DB.pauseRepas = DB.pauseRepas || {};
+      DB.pauseAuto = DB.pauseAuto || {}; DB.commentaires = DB.commentaires || {};
+      DB.settings = DB.settings || { emailjs: { serviceId: "", templateId: "", publicKey: "" }, alertEmail: "", maxTries: 3 };
+      if (!DB.settings.emailjs) DB.settings.emailjs = { serviceId: "", templateId: "", publicKey: "" };
+      saveDB();
+      this._stamp();
+      const quand = data.updated_at ? new Date(data.updated_at).toLocaleString("fr-FR") : "?";
+      toast("Données récupérées depuis le cloud ✓ (version du " + quand + ")", "ok");
+      try { logAction("Synchro", "Récupération cloud", "Données locales remplacées par la version en ligne"); } catch (e) {}
+      App.renderAdminPanel();
+    } catch (e) { toast("Erreur de récupération : " + (e.message || e), "err"); }
+  },
+
+  renderPanel() {
+    const c = this._panelEl || document.getElementById("adminContent");
+    if (!c) return;
+    const libOk = !!(window.supabase && window.supabase.createClient);
+    const online = navigator.onLine;
+    const role = this.getRole();
+    const last = this.lastSync();
+    const lastTxt = last ? new Date(last).toLocaleString("fr-FR") : "jamais";
+    const who = this._user ? (this._user.email || "connecté") : null;
+
+    let statut, col;
+    if (!libOk) { statut = "⚠️ Librairie de synchro non chargée — ouvrez l'app une fois EN LIGNE."; col = "rgba(240,168,48,.5)"; }
+    else if (!online) { statut = "📴 Hors-ligne — la synchro reprendra dès le retour d'internet."; col = "rgba(240,168,48,.5)"; }
+    else if (!who) { statut = "🔓 Non connecté à la synchro."; col = "rgba(240,168,48,.5)"; }
+    else { statut = "✅ Connecté : " + who; col = "rgba(60,200,120,.5)"; }
+
+    let html = `
+      <p class="modal-sub" style="margin-top:4px">Sauvegarde en ligne et consultation à distance. Le <b>pointage reste toujours possible hors-ligne</b> — la synchro est un plus.</p>
+      <div class="day-banner" style="border-color:${col}">${statut}</div>
+      <div class="field"><span>Rôle de cet appareil</span>
+        <select onchange="Cloud.setRole(this.value)">
+          <option value="lecture" ${role === "lecture" ? "selected" : ""}>Consultation (lecture seule)</option>
+          <option value="tablette" ${role === "tablette" ? "selected" : ""}>Tablette de pointage (envoi)</option>
+        </select>
+      </div>`;
+
+    if (libOk && who) {
+      html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">`;
+      if (role === "tablette") html += `<button class="btn" onclick="Cloud.push()">⬆️ Envoyer maintenant</button>`;
+      html += `<button class="btn ${role === "tablette" ? "btn-ghost" : ""}" onclick="Cloud.pull()">⬇️ Récupérer maintenant</button>`;
+      html += `<button class="btn btn-ghost btn-sm" onclick="Cloud.logout()">Se déconnecter</button></div>`;
+      html += `<p class="modal-sub">Dernière synchro sur cet appareil : <b>${lastTxt}</b></p>`;
+    } else if (libOk) {
+      html += `
+      <div class="field"><span>Email partagé</span><input id="cloudEmail" type="email" autocomplete="username" placeholder="email de synchro"></div>
+      <div class="field"><span>Mot de passe partagé</span><input id="cloudPwd" type="password" autocomplete="current-password" placeholder="mot de passe"></div>
+      <button class="btn" onclick="Cloud.login(document.getElementById('cloudEmail').value, document.getElementById('cloudPwd').value)">Se connecter à la synchro</button>`;
+    }
+
+    html += `<p class="modal-sub" style="margin-top:14px;opacity:.85">Rappel : la <b>tablette</b> envoie les données ; les autres appareils <b>consultent</b>. Continuez à faire vos exports réguliers comme sauvegarde.</p>`;
+    c.innerHTML = html;
+  }
+};
+</script>
+<script>
+  /* Service worker : met la badgeuse en cache pour qu'elle fonctionne SANS internet.
+     A la 1re ouverture EN LIGNE, tout est mis en cache ; ensuite l'app se lance hors-ligne. */
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('service-worker.js').catch(function () {});
+    });
+  }
+  /* Demande a iOS de conserver les donnees locales (limite l'effacement automatique) */
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persist().catch(function () {});
+  }
 </script>
 </body>
 </html>
