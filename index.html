@@ -706,6 +706,20 @@ function _filtrerParMois(obj, mois){
   return o;
 }
 
+/* Mois (AAAA-MM) présents dans les pointages stockés en local. */
+function moisPresentsLocal(){
+  const s = new Set();
+  (DB.pointages||[]).forEach(p=>{ if(p && p.date) s.add(p.date.slice(0,7)); });
+  return [...s].sort();
+}
+
+/* Fenêtre conservée sur la tablette : mois en cours + mois précédent. */
+function moisAConserver(){
+  const cur = todayISO().slice(0,7);
+  const dP = new Date(); dP.setDate(1); dP.setMonth(dP.getMonth()-1);
+  return new Set([cur, todayISO(dP).slice(0,7)]);
+}
+
 /* Programme l'archivage en ligne du mois courant + du mois précédent (tablette),
    au plus une fois toutes les 20 min. Ainsi les mois terminés sont toujours conservés
    en ligne AVANT tout allègement de la tablette. */
@@ -723,6 +737,21 @@ function planifierArchivageCloud(){
     const moisPrec = todayISO(dPrec).slice(0,7);
     App.archiverMoisCloud(moisCourant);
     App.archiverMoisCloud(moisPrec);
+  } catch(e) {}
+}
+
+/* Entretien automatique : allège la tablette (mois anciens archivés+vérifiés puis
+   retirés), au plus une fois par heure, sur la tablette et en ligne. */
+let _allegLast = 0;
+function planifierAllegementCloud(){
+  if (typeof Cloud === "undefined" || typeof App === "undefined") return;
+  try {
+    if (Cloud.getRole() !== "tablette") return;
+    if (!navigator.onLine) return;
+    const now = Date.now();
+    if (now - _allegLast < 60*60*1000) return;
+    _allegLast = now;
+    App.allegerTablette(true);
   } catch(e) {}
 }
 
@@ -2942,29 +2971,41 @@ const App = {
     return `_${idsSet.size}-salaries`;
   },
 
-  /* ---- ARCHIVAGE EN LIGNE d'un mois (tablette) : CSV de paie prêt + données brutes ----
-     Généré tant que la tablette a encore le mois, puis conservé sans limite dans le cloud. */
+  /* Construit (en mémoire) l'archive d'un mois : CSV de paie + données brutes. */
+  _construireArchiveMois(mois) {
+    const cur = { from: this.expFrom, to: this.expTo };
+    this.expFrom = mois + "-01"; this.expTo = mois + "-31";
+    let csv = "";
+    try { const r = this.exportPointages(null, { returnString: true }); csv = r ? r.csv : ""; } catch(e) { csv = ""; }
+    this.expFrom = cur.from; this.expTo = cur.to;
+    const snap = {
+      pointages: (DB.pointages||[]).filter(p => p.date && p.date.slice(0,7) === mois),
+      planning: _filtrerParMois(DB.planning, mois),
+      absences: _filtrerParMois(DB.absences, mois),
+      commentaires: _filtrerParMois(DB.commentaires, mois),
+      journal: (DB.journal||[]).filter(x => x && x.ts && new Date(x.ts).toISOString().slice(0,7) === mois),
+      team: DB.team || [], renforts: DB.renforts || {}, extras: DB.extras || {}
+    };
+    return { csv, snap };
+  },
+
+  /* ---- ARCHIVAGE EN LIGNE d'un mois (tablette), version "au fil de l'eau" ---- */
   archiverMoisCloud(mois) {
     try {
       if (typeof Cloud === "undefined" || Cloud.getRole() !== "tablette") return;
       if (!/^\d{4}-\d{2}$/.test(mois||"")) return;
-      // CSV du mois, sans perturber la plage d'export affichée
-      const cur = { from: this.expFrom, to: this.expTo };
-      this.expFrom = mois + "-01"; this.expTo = mois + "-31";
-      let csv = "";
-      try { const r = this.exportPointages(null, { returnString: true }); csv = r ? r.csv : ""; } catch(e) { csv = ""; }
-      this.expFrom = cur.from; this.expTo = cur.to;
-      // Données brutes du mois (pour les signatures et le détail)
-      const snap = {
-        pointages: (DB.pointages||[]).filter(p => p.date && p.date.slice(0,7) === mois),
-        planning: _filtrerParMois(DB.planning, mois),
-        absences: _filtrerParMois(DB.absences, mois),
-        commentaires: _filtrerParMois(DB.commentaires, mois),
-        team: DB.team || [], renforts: DB.renforts || {}, extras: DB.extras || {}
-      };
-      if (!snap.pointages.length && !Object.keys(snap.planning).length) return; // rien à archiver ce mois
+      const { csv, snap } = this._construireArchiveMois(mois);
+      if (!snap.pointages.length && !Object.keys(snap.planning).length) return; // rien à archiver
       Cloud.upsertArchive(mois, csv, snap);
     } catch(e) {}
+  },
+
+  /* Version qui ATTEND la confirmation d'écriture (utilisée avant d'alléger). */
+  async archiverMoisCloudAsync(mois) {
+    if (!/^\d{4}-\d{2}$/.test(mois||"")) return false;
+    const { csv, snap } = this._construireArchiveMois(mois);
+    if (!snap.pointages.length && !Object.keys(snap.planning).length) return true; // rien à archiver = ok
+    return await Cloud.upsertArchiveAsync(mois, csv, snap);
   },
 
   /* ---- EXTRACTION depuis le cloud : liste des mois archivés puis téléchargement ---- */
@@ -2976,10 +3017,16 @@ const App = {
       const { data, error } = await sb.from("archives_mois").select("mois,updated_at").order("mois", { ascending: false });
       if (error) { toast("Erreur : " + error.message, "err"); return; }
       if (!data || !data.length) { toast("Aucun mois archivé pour l'instant (l'archivage se fait depuis la tablette).", "err"); return; }
-      const rows = data.map(r => `<button class="btn btn-ghost btn-block" style="text-align:left" onclick="App._telechargerMoisCloud('${r.mois}')">📅 ${r.mois}</button>`).join("");
+      const rows = data.map(r => `
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+          <span style="flex:1;min-width:70px;font-weight:600">📅 ${r.mois}</span>
+          <button class="btn btn-ghost btn-sm" onclick="App._telechargerMoisCloud('${r.mois}')">CSV paie</button>
+          <button class="btn btn-ghost btn-sm" onclick="App._telechargerSignaturesCloud('${r.mois}')">🖊️ Signatures</button>
+          <button class="btn btn-ghost btn-sm" onclick="App._telechargerJournalCloud('${r.mois}')">📝 Journal</button>
+        </div>`).join("");
       openModal(`<button class="modal-close" onclick="closeModal()">×</button>
         <h3>☁️ Extraire un mois depuis le cloud</h3>
-        <div class="modal-sub" style="margin-bottom:12px">Choisissez le mois à télécharger (CSV de paie). Rien n'est chargé sur cet appareil.</div>
+        <div class="modal-sub" style="margin-bottom:12px">Choisissez le mois, puis <b>CSV paie</b>, <b>Signatures</b> ou <b>Journal</b>. Rien n'est chargé sur cet appareil.</div>
         ${rows}`);
     } catch(e) { toast("Erreur : " + (e.message||e), "err"); }
   },
@@ -2993,6 +3040,94 @@ const App = {
       toast("CSV du mois " + mois + " téléchargé ✓", "ok");
       closeModal();
     } catch(e) { toast("Erreur : " + (e.message||e), "err"); }
+  },
+  /* Signatures d'un mois archivé, récupérées depuis le cloud (mêmes colonnes/impression
+     que l'export local), sans rien charger sur cet appareil. */
+  async _telechargerSignaturesCloud(mois) {
+    const sb = Cloud.client(); if (!sb) return;
+    try {
+      const { data, error } = await sb.from("archives_mois").select("snapshot").eq("mois", mois).maybeSingle();
+      if (error) { toast("Erreur : " + error.message, "err"); return; }
+      const snap = data && data.snapshot;
+      const ptg = (snap && Array.isArray(snap.pointages) ? snap.pointages : [])
+        .filter(p => p && p.signature)
+        .sort((a,b)=> a.date===b.date ? ((a.ts||0)-(b.ts||0)) : (a.date<b.date?-1:1));
+      if (!ptg.length) { toast("Aucune signature archivée pour ce mois.", "err"); return; }
+      const html = this._signaturesAuditHTML(ptg, (snap && snap.team) || [], mois);
+      downloadFile(html, `signatures_audit_${mois}.html`, "text/html");
+      toast(`Signatures du mois ${mois} : ${ptg.length} signature(s) ✓`, "ok");
+      closeModal();
+    } catch(e) { toast("Erreur : " + (e.message||e), "err"); }
+  },
+  /* Journal d'un mois archivé, récupéré depuis le cloud (même format CSV que la tablette). */
+  async _telechargerJournalCloud(mois) {
+    const sb = Cloud.client(); if (!sb) return;
+    try {
+      const { data, error } = await sb.from("archives_mois").select("snapshot").eq("mois", mois).maybeSingle();
+      if (error) { toast("Erreur : " + error.message, "err"); return; }
+      const j = (data && data.snapshot && Array.isArray(data.snapshot.journal)) ? data.snapshot.journal : [];
+      if (!j.length) { toast("Aucune entrée de journal archivée pour ce mois.", "err"); return; }
+      const csv = this._journalCSV(j);
+      downloadFile(csv, `journal_${mois}.csv`, "text/csv");
+      toast(`Journal du mois ${mois} : ${j.length} entrée(s) ✓`, "ok");
+      closeModal();
+    } catch(e) { toast("Erreur : " + (e.message||e), "err"); }
+  },
+
+  /* ---- ALLÈGEMENT DE LA TABLETTE ----
+     Ne garde que le mois en cours + le précédent. Pour chaque mois plus ancien :
+     1) on l'archive en ligne (attendable), 2) on VÉRIFIE que la copie en ligne
+     contient bien tous ses pointages, 3) seulement alors on le retire du local.
+     -> Aucune donnée ne peut être perdue : pas de retrait sans copie confirmée. */
+  async allegerTablette(auto) {
+    if (typeof Cloud === "undefined" || Cloud.getRole() !== "tablette") { if (!auto) toast("À faire depuis la tablette (rôle « Tablette »).", "err"); return; }
+    if (!navigator.onLine) { if (!auto) toast("Connexion internet requise pour archiver avant d'alléger.", "err"); return; }
+    const s = await Cloud._session(); if (!s) { if (!auto) toast("Connectez-vous d'abord dans l'onglet ☁️ Synchro.", "err"); return; }
+
+    const garder = moisAConserver();
+    const anciens = moisPresentsLocal().filter(m => !garder.has(m));
+    if (!anciens.length) { if (!auto) toast("Rien à alléger : la tablette ne contient que le mois en cours et le précédent.", "ok"); return; }
+
+    const retires = [], echecs = [];
+    for (const m of anciens) {
+      const nb = (DB.pointages||[]).filter(p => p.date && p.date.slice(0,7) === m).length;
+      let ok = false;
+      try { ok = await this.archiverMoisCloudAsync(m); } catch(e) { ok = false; }
+      let complet = false;
+      if (ok) { try { complet = await Cloud.archiveMoisComplet(m, nb); } catch(e) { complet = false; } }
+      if (complet) retires.push(m); else echecs.push(m);
+    }
+
+    if (retires.length) {
+      const setRet = new Set(retires);
+      DB.pointages = (DB.pointages||[]).filter(p => !(p.date && setRet.has(p.date.slice(0,7))));
+      DB.journal   = (DB.journal||[]).filter(x => !(x && x.ts && setRet.has(new Date(x.ts).toISOString().slice(0,7))));
+      for (const k in (DB.absences||{}))    if (setRet.has(k.slice(0,7))) delete DB.absences[k];
+      for (const k in (DB.commentaires||{})) if (setRet.has(k.slice(0,7))) delete DB.commentaires[k];
+      for (const k in (DB.planning||{}))     if (setRet.has(k.slice(0,7))) delete DB.planning[k];
+      saveDB();
+      try { logAction("Système", "Allègement tablette", `Mois archivés (vérifiés) puis retirés du local : ${retires.join(", ")}`); } catch(e) {}
+    }
+
+    if (!auto) {
+      let msg = retires.length
+        ? `Tablette allégée ✓ — ${retires.length} mois archivé(s) en ligne puis retiré(s) du local : ${retires.join(", ")}.`
+        : "Aucun mois n'a pu être retiré.";
+      if (echecs.length) msg += ` ⚠️ Conservés par prudence (archivage en ligne à confirmer) : ${echecs.join(", ")}.`;
+      toast(msg, (echecs.length && !retires.length) ? "err" : "ok");
+      try { verifierEspaceStockage(); } catch(e) {}
+      if (this.session) this.renderAdminPanel();
+    }
+  },
+
+  /* Bouton manuel : confirmation puis allègement. */
+  allegerTabletteManuel() {
+    if (typeof Cloud === "undefined" || Cloud.getRole() !== "tablette") { toast("À faire depuis la tablette (rôle « Tablette »).", "err"); return; }
+    const anciens = moisPresentsLocal().filter(m => !moisAConserver().has(m));
+    if (!anciens.length) { toast("Rien à alléger : seuls le mois en cours et le précédent sont présents.", "ok"); return; }
+    if (!confirm(`Alléger la tablette ?\n\nLes mois anciens (${anciens.join(", ")}) seront d'abord archivés en ligne, VÉRIFIÉS, puis retirés de la tablette pour libérer de la place. Le mois en cours et le précédent restent intacts, et rien n'est retiré tant que la copie en ligne n'est pas confirmée.`)) return;
+    toast("Archivage et vérification en cours… patientez quelques instants.", "ok");
+    this.allegerTablette(false);
   },
   /* Popup de sélection des salariés à exporter (sur la plage déjà choisie) */
   choisirSalariesExport(type) {
@@ -3030,13 +3165,24 @@ const App = {
      AFFICHÉE EN IMAGE. Ouvrable dans tout navigateur, imprimable en PDF. */
   exporterSignaturesAudit(ids) {
     const idsSet = (ids && ids.length) ? new Set(ids) : null;
-    const esc = s => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
     const ptg = DB.pointages
       .filter(p => p.signature && this._dansPlage(p.date) && (!idsSet || idsSet.has(p.empId)))
       .sort((a,b)=> a.date===b.date ? (a.ts-b.ts) : (a.date<b.date?-1:1));
     if (!ptg.length) { toast("Aucune signature à exporter pour cette sélection.", "err"); return; }
+    const plage = (this.expFrom||this.expTo) ? `${this.expFrom||"début"} → ${this.expTo||"fin"}` : "tout l'historique";
+    const html = this._signaturesAuditHTML(ptg, DB.team, plage);
+    const suffixe = ((this.expFrom||this.expTo) ? `_${this.expFrom||"debut"}_au_${this.expTo||"fin"}` : "_tout") + this._suffixeSalaries(idsSet);
+    downloadFile(html, `signatures_audit${suffixe}_${todayISO()}.html`, "text/html");
+    logAction(this.session?emp(this.session.empId).nom:"?", "Export signatures (audit)", `${ptg.length} signature(s)${idsSet?` — ${idsSet.size} salarié(s)`:""} — période : ${plage}`);
+    toast(`Export signatures généré : ${ptg.length} signature(s).`, "ok");
+  },
+  /* Construit le document HTML d'audit des signatures. Réutilisé pour l'export LOCAL
+     (données de la tablette) ET l'extraction CLOUD (données d'un mois archivé). */
+  _signaturesAuditHTML(ptg, teamArr, plageLabel) {
+    const esc = s => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    const empDe = id => (teamArr||[]).find(e => e && e.id===id);
     const lignes = ptg.map(p=>{
-      const e = emp(p.empId);
+      const e = empDe(p.empId);
       const type = p.type==="in" ? "Arrivée" : (p.type==="out" ? "Départ" : esc(p.type));
       const modif = (p.editedBy ? ` <span class="badge">modifié : ${esc(p.editedBy)}</span>` : "");
       return `<tr>
@@ -3048,8 +3194,7 @@ const App = {
         <td class="sigcell"><img src="${p.signature}" alt="signature de ${esc(e?e.nom:'')}"></td>
       </tr>`;
     }).join("");
-    const plage = (this.expFrom||this.expTo) ? `${this.expFrom||"début"} → ${this.expTo||"fin"}` : "tout l'historique";
-    const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
+    return `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Signatures de pointage — audit</title>
 <style>
@@ -3067,30 +3212,27 @@ const App = {
 </style></head>
 <body>
   <h1>Signatures de pointage — audit</h1>
-  <p class="sub">Période : ${esc(plage)} &nbsp;·&nbsp; ${ptg.length} signature(s) &nbsp;·&nbsp; document généré le ${esc(frDate(todayISO()))}. Pour archiver en PDF : menu d'impression du navigateur → « Enregistrer en PDF ».</p>
+  <p class="sub">Période : ${esc(plageLabel)} &nbsp;·&nbsp; ${ptg.length} signature(s) &nbsp;·&nbsp; document généré le ${esc(frDate(todayISO()))}. Pour archiver en PDF : menu d'impression du navigateur → « Enregistrer en PDF ».</p>
   <table>
     <thead><tr><th>Date</th><th>Salarié</th><th>Rôle</th><th>Type</th><th>Heure</th><th>Signature</th></tr></thead>
     <tbody>${lignes}</tbody>
   </table>
 </body></html>`;
-    const suffixe = ((this.expFrom||this.expTo) ? `_${this.expFrom||"debut"}_au_${this.expTo||"fin"}` : "_tout") + this._suffixeSalaries(idsSet);
-    downloadFile(html, `signatures_audit${suffixe}_${todayISO()}.html`, "text/html");
-    logAction(this.session?emp(this.session.empId).nom:"?", "Export signatures (audit)", `${ptg.length} signature(s)${idsSet?` — ${idsSet.size} salarié(s)`:""} — période : ${plage}`);
-    toast(`Export signatures généré : ${ptg.length} signature(s).`, "ok");
   },
   exportJournal() {
-    let csv = "Date/heure;Qui;Action;Détail\n";
-    let nbLignes = 0;
-    DB.journal.forEach(x=>{
-      // date ISO de l'événement (AAAA-MM-JJ)
-      const dateISO = new Date(x.ts).toISOString().slice(0,10);
-      if (!this._dansPlage(dateISO)) return;
-      csv += `${new Date(x.ts).toLocaleString("fr-FR")};${x.who};${x.action};"${(x.detail||'').replace(/"/g,'""')}"\n`;
-      nbLignes++;
-    });
+    const entries = (DB.journal||[]).filter(x => this._dansPlage(new Date(x.ts).toISOString().slice(0,10)));
+    const csv = this._journalCSV(entries);
     const suffixe = (this.expFrom||this.expTo) ? `_${this.expFrom||"debut"}_au_${this.expTo||"fin"}` : "_tout";
     downloadFile(csv, `journal${suffixe}_${todayISO()}.csv`, "text/csv");
-    toast(nbLignes ? `Export journal généré : ${nbLignes} entrée(s).` : "Export généré (aucune entrée dans la plage choisie).", "ok");
+    toast(entries.length ? `Export journal généré : ${entries.length} entrée(s).` : "Export généré (aucune entrée dans la plage choisie).", "ok");
+  },
+  /* Construit le CSV du journal (même format que l'export tablette). Réutilisé local + cloud. */
+  _journalCSV(entries) {
+    let csv = "Date/heure;Qui;Action;Détail\n";
+    (entries||[]).forEach(x=>{
+      csv += `${new Date(x.ts).toLocaleString("fr-FR")};${x.who};${x.action};"${(x.detail||'').replace(/"/g,'""')}"\n`;
+    });
+    return csv;
   },
   resetData() {
     const aNbP = DB.pointages.length;
@@ -4039,12 +4181,16 @@ function bootNormalApresRecuperation(){
     setInterval(()=>{ try{ if(typeof Cloud!=="undefined") Cloud.autoPull(); }catch(e){} }, 60*1000);
     // Archivage périodique des mois (tablette) : conservation durable dans le cloud
     setInterval(()=>{ try{ planifierArchivageCloud(); }catch(e){} }, 20*60*1000);
+    // Allègement automatique de la tablette (tablette) : retire les mois anciens déjà archivés+vérifiés
+    setInterval(()=>{ try{ planifierAllegementCloud(); }catch(e){} }, 60*60*1000);
   }
   App.showBadge();
   try{ App.verifierRappelSauvegarde(); }catch(e){}
   try{ verifierEspaceStockage(); }catch(e){}
   try{ if(typeof Cloud!=="undefined") Cloud.autoPull(); }catch(e){}          // 1re récupération au démarrage (consultation)
   try{ planifierArchivageCloud(); }catch(e){}                                // 1er archivage au démarrage (tablette)
+  // 1er allègement peu après le démarrage (laisse le temps à l'archivage d'écrire d'abord)
+  setTimeout(()=>{ try{ planifierAllegementCloud(); }catch(e){} }, 90*1000);
 }
 
 /* Nouvelle installation confirmée : on part à vide et on enregistre. */
@@ -4149,6 +4295,31 @@ const Cloud = {
       const s = await this._session(); if (!s) return;
       await sb.from("archives_mois").upsert({ mois: mois, csv: csv, snapshot: snapshot, updated_at: new Date().toISOString() });
     } catch (e) {}
+  },
+
+  /* Version ATTENDABLE : renvoie true seulement si l'écriture en ligne a réussi. */
+  async upsertArchiveAsync(mois, csv, snapshot) {
+    try {
+      if (this.getRole() !== "tablette") return false;
+      if (!navigator.onLine) return false;
+      const sb = this.client(); if (!sb) return false;
+      const s = await this._session(); if (!s) return false;
+      const { error } = await sb.from("archives_mois").upsert({ mois: mois, csv: csv, snapshot: snapshot, updated_at: new Date().toISOString() });
+      return !error;
+    } catch (e) { return false; }
+  },
+
+  /* Vérifie que l'archive en ligne d'un mois contient AU MOINS nbAttendu pointages.
+     C'est la garantie avant tout retrait local : on ne supprime que si la copie
+     en ligne est bien complète. */
+  async archiveMoisComplet(mois, nbAttendu) {
+    try {
+      const sb = this.client(); if (!sb) return false;
+      const s = await this._session(); if (!s) return false;
+      const { data, error } = await sb.from("archives_mois").select("snapshot").eq("mois", mois).maybeSingle();
+      if (error || !data || !data.snapshot || !Array.isArray(data.snapshot.pointages)) return false;
+      return data.snapshot.pointages.length >= nbAttendu;
+    } catch (e) { return false; }
   },
 
   /* Sauvegarde en ligne silencieuse (appelée automatiquement sur la tablette). */
@@ -4320,6 +4491,11 @@ const Cloud = {
       html += `<button class="btn ${role === "tablette" ? "btn-ghost" : ""}" onclick="Cloud.pull()">⬇️ Récupérer maintenant</button>`;
       html += `<button class="btn btn-ghost btn-sm" onclick="Cloud.logout()">Se déconnecter</button></div>`;
       html += `<p class="modal-sub">Dernière synchro sur cet appareil : <b>${lastTxt}</b></p>`;
+      if (role === "tablette") {
+        html += `<div style="margin:12px 0 6px;border-top:1px solid var(--line)"></div>`;
+        html += `<p class="modal-sub" style="margin-bottom:8px">🧹 <b>Alléger la tablette</b> — archive en ligne les mois anciens (au-delà du mois en cours et du précédent), vérifie qu'ils y sont bien, puis les retire d'ici pour libérer de la place. Rien n'est retiré sans copie en ligne confirmée. Se fait aussi automatiquement.</p>`;
+        html += `<button class="btn btn-ghost" onclick="App.allegerTabletteManuel()">🧹 Alléger la tablette maintenant</button>`;
+      }
     } else if (libOk) {
       html += `
       <div class="field"><span>Email partagé</span><input id="cloudEmail" type="email" autocomplete="username" placeholder="email de synchro"></div>
