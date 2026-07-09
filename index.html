@@ -546,7 +546,7 @@ function idbSet(val) {
 /* Compression de la signature : on réduit la résolution puis on exporte en
    JPEG (fond blanc). De l'ordre de 5 à 10x plus léger qu'un PNG plein écran. */
 function compresserSignature(srcCanvas, maxW) {
-  maxW = maxW || 380;
+  maxW = maxW || 300;
   try {
     const sw = srcCanvas.width || maxW, sh = srcCanvas.height || Math.round(maxW/3);
     const ratio = Math.min(1, maxW / sw);
@@ -555,39 +555,30 @@ function compresserSignature(srcCanvas, maxW) {
     const ctx = off.getContext("2d");
     ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h);   // JPEG ne gère pas la transparence
     ctx.drawImage(srcCanvas, 0, 0, w, h);
-    return off.toDataURL("image/jpeg", 0.6);
+    return off.toDataURL("image/jpeg", 0.5);
   } catch(e) {
     try { return srcCanvas.toDataURL("image/png"); } catch(_) { return ""; } // repli
   }
 }
 
-async function loadDB() {
-  let loaded = null;
-  // 1) IndexedDB
-  try { loaded = await idbGet(); } catch(e) { console.warn("Lecture IndexedDB impossible", e); }
-  // 2) Migration unique depuis l'ancien localStorage (puis on libère les ~5 Mo)
-  if (!loaded) {
-    try {
-      const raw = localStorage.getItem(STORE_KEY);
-      if (raw) {
-        loaded = JSON.parse(raw);
-        try { await idbSet(loaded); localStorage.removeItem(STORE_KEY); }
-        catch(e) { console.warn("Migration vers IndexedDB impossible", e); }
-      }
-    } catch(e) { console.warn("Lecture localStorage impossible", e); }
-  }
-  if (loaded) DB = loaded;
-  if (!DB) {
-    DB = {
-      team: JSON.parse(JSON.stringify(DEFAULT_TEAM)),
-      planning: {}, renforts: {}, extras: {}, pointages: [], journal: [],
-      lastPlanningName: null,
-      security: { failCount:0, locked:false, lockedAt:null },
-      settings: { emailjs:{ serviceId:"", templateId:"", publicKey:"" }, alertEmail:"", maxTries:3, seuilConflits:5 },
-      lastBusinessDay: null, lastBackupMonth: null
-    };
-  }
-  // garde-fous structure
+/* Flags de sécurité stockage : tant qu'ils sont vrais, saveDB() n'écrit RIEN
+   (on ne veut jamais écraser des données encore présentes par une base vide). */
+let _storageBlocked = false;   // lecture impossible (erreur) -> ne rien écraser
+let _storageEmpty   = false;   // aucune donnée -> demander avant de repartir à vide
+
+function freshDB() {
+  return {
+    team: JSON.parse(JSON.stringify(DEFAULT_TEAM)),
+    planning: {}, renforts: {}, extras: {}, pointages: [], journal: [],
+    lastPlanningName: null,
+    security: { failCount:0, locked:false, lockedAt:null },
+    settings: { emailjs:{ serviceId:"", templateId:"", publicKey:"" }, alertEmail:"", maxTries:3, seuilConflits:5 },
+    aVerifier:{}, absences:{}, pauseRepas:{}, pauseAuto:{}, commentaires:{},
+    lastBusinessDay: null, lastBackupMonth: null
+  };
+}
+
+function _gardeFousDB() {
   DB.team       = DB.team || [];
   DB.planning   = DB.planning || {};
   DB.renforts   = DB.renforts || {};
@@ -604,8 +595,41 @@ async function loadDB() {
   if (!DB.settings.emailjs) DB.settings.emailjs = { serviceId:"", templateId:"", publicKey:"" };
   if (!DB.settings.maxTries) DB.settings.maxTries = 3;
   if (!DB.settings.seuilConflits) DB.settings.seuilConflits = 5;
-  saveDB();           // persiste (init par défaut, migration, ou nouveaux garde-fous)
-  checkAutoUnlock();
+}
+
+async function loadDB() {
+  let loaded = null, readError = false;
+  // 1) IndexedDB
+  try { loaded = await idbGet(); }
+  catch(e) { readError = true; console.warn("Lecture IndexedDB impossible", e); }
+  // 2) Migration unique depuis l'ancien localStorage (puis on libère les ~5 Mo)
+  if (!loaded) {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) {
+        loaded = JSON.parse(raw);
+        try { await idbSet(loaded); localStorage.removeItem(STORE_KEY); }
+        catch(e) { console.warn("Migration vers IndexedDB impossible", e); }
+      }
+    } catch(e) { readError = true; console.warn("Lecture localStorage impossible", e); }
+  }
+
+  if (loaded) {
+    DB = loaded;
+    _gardeFousDB();
+    saveDB();           // persiste d'éventuels garde-fous
+    checkAutoUnlock();
+    return;
+  }
+
+  // RIEN chargé : deux situations TRÈS différentes. On ne repart JAMAIS à vide en
+  // silence — sinon un simple problème de lecture effacerait tout (c'est ce qui
+  // s'était produit). On prépare une base EN MÉMOIRE (pour l'écran de secours),
+  // mais on ne l'ENREGISTRE PAS tant que l'utilisateur n'a pas choisi.
+  DB = freshDB();
+  if (readError) _storageBlocked = true;   // lecture impossible : données peut-être encore là
+  else           _storageEmpty   = true;   // vide : 1re installation OU stockage effacé par l'appareil
+  // La suite (écran de secours) est gérée au démarrage, voir demarrer().
 }
 
 /* Déblocage automatique : à la prochaine 8h00 après le verrouillage.
@@ -629,6 +653,10 @@ function checkAutoUnlock() {
 
 let _saving = false, _savePending = false;
 function saveDB() {
+  // SÉCURITÉ : ne jamais écrire tant qu'un problème de stockage n'est pas résolu
+  // (évite d'écraser des données encore présentes par une base vide).
+  if (_storageBlocked || _storageEmpty) return;
+  try { planifierSauvegardeCloud(); } catch(e) {}   // sauvegarde en ligne (tablette), best-effort
   // Persistance asynchrone en IndexedDB, avec coalescence (une écriture à la fois).
   if (_idbKO) return _saveFallback();
   if (_saving) { _savePending = true; return; }
@@ -655,6 +683,20 @@ function _saveFallback() {
   catch(e) {
     toast("Mémoire de l'appareil pleine : enregistrement impossible. Exportez vite une sauvegarde (.json), puis libérez de la place (archiver d'anciens salariés, exporter puis effacer d'anciens mois).", "err");
   }
+}
+
+/* Programme une sauvegarde EN LIGNE (tablette uniquement), au plus une fois toutes
+   les ~2 minutes, silencieuse et sans jamais bloquer l'app. Filet de sécurité :
+   même si le stockage local est purgé, une copie récente reste accessible en ligne. */
+let _cloudPushTimer = null;
+function planifierSauvegardeCloud(){
+  if (typeof Cloud === "undefined") return;
+  try {
+    if (Cloud.getRole() !== "tablette") return;
+    if (!navigator.onLine) return;
+    if (_cloudPushTimer) return;
+    _cloudPushTimer = setTimeout(()=>{ _cloudPushTimer = null; try{ Cloud.autoPush(); }catch(e){} }, 120000);
+  } catch(e) {}
 }
 
 /* ---- Utilitaires date/heure ---- */
@@ -2758,6 +2800,7 @@ const App = {
     const pending = this._restaurePending;
     if (!pending) return;
     const obj = pending.obj;
+    _storageBlocked = false; _storageEmpty = false;   // la restauration lève les verrous de sécurité
     DB = obj;
     // garde-fous sur les structures, comme loadDB
     DB.team=DB.team||[]; DB.planning=DB.planning||{}; DB.renforts=DB.renforts||{};
@@ -3873,17 +3916,102 @@ function tickClock(){
 /* ====================================================================
    DÉMARRAGE
    ==================================================================== */
+let _clockStarted = false;
+
+/* Vérifie l'espace de stockage et prévient AVANT saturation (best-effort). */
+async function verifierEspaceStockage(){
+  try{
+    if(!navigator.storage || !navigator.storage.estimate) return;
+    const est = await navigator.storage.estimate();
+    if(!est || !est.quota) return;
+    const pct = est.usage / est.quota;
+    if(pct >= 0.8){
+      toast("⚠️ Stockage de l'appareil rempli à "+Math.round(pct*100)+"%. Faites une sauvegarde (.json) et allégez d'anciens mois pour éviter tout blocage.", "err");
+    }
+  }catch(e){}
+}
+
+/* Suite normale du démarrage (après un chargement OK ou une restauration). */
+function bootNormalApresRecuperation(){
+  try{ cloturerJoursEcoules(App.currentDate); }catch(e){}
+  if(!_clockStarted){
+    _clockStarted = true;
+    tickClock(); setInterval(tickClock,1000);
+    document.addEventListener("visibilitychange", ()=>{
+      if(!document.hidden){ tickClock(); }
+      else { try{ if(typeof Cloud!=="undefined") Cloud.autoPush(); }catch(e){} }  // sauvegarde en ligne à la fermeture
+    });
+    window.addEventListener("focus", tickClock);
+    // Sauvegarde en ligne périodique (tablette) : filet de sécurité contre une purge du stockage
+    setInterval(()=>{ try{ planifierSauvegardeCloud(); }catch(e){} }, 10*60*1000);
+  }
+  App.showBadge();
+  try{ App.verifierRappelSauvegarde(); }catch(e){}
+  try{ verifierEspaceStockage(); }catch(e){}
+}
+
+/* Nouvelle installation confirmée : on part à vide et on enregistre. */
+function demarrerAVide(){
+  _storageEmpty = false; _storageBlocked = false;
+  DB = freshDB(); _gardeFousDB();
+  saveDB();
+  try{ logAction("Système","Nouvelle installation","Démarrage à vide (aucune donnée trouvée)"); }catch(e){}
+  bootNormalApresRecuperation();
+}
+
+/* Restauration d'une sauvegarde .json depuis l'écran de secours. */
+function importerSauvegardeAuBoot(file){
+  if(!file) return;
+  file.text().then(txt=>{
+    let obj; try{ obj = JSON.parse(txt); }catch(e){ toast("Fichier illisible.","err"); return; }
+    if(!obj || !obj.team || !obj.pointages){ toast("Fichier de sauvegarde invalide.","err"); return; }
+    _storageBlocked = false; _storageEmpty = false;
+    DB = obj; _gardeFousDB();
+    saveDB();
+    try{ logAction("Système","Restauration au démarrage","Sauvegarde .json restaurée"); }catch(e){}
+    toast("Sauvegarde restaurée ✓","ok");
+    bootNormalApresRecuperation();
+  }).catch(()=>toast("Impossible de lire ce fichier.","err"));
+}
+
+/* Écran de secours : aucune donnée exploitable au démarrage. On NE repart JAMAIS
+   à vide sans que l'utilisateur choisisse -> plus d'effacement silencieux. */
+function afficherEcranSecours(mode){
+  const bloque = (mode === "blocked");
+  const scrB = document.getElementById("scr-badge");
+  const scrA = document.getElementById("scr-admin");
+  if(scrA) scrA.classList.remove("active");
+  if(!scrB) return;
+  scrB.classList.add("active");
+  const titre = bloque ? "⚠️ Lecture des données impossible" : "⚠️ Aucune donnée sur cet appareil";
+  const expl = bloque
+    ? "Les données enregistrées n'ont pas pu être lues (erreur temporaire). <b>Par sécurité, rien n'a été effacé</b> et le pointage est suspendu. Rechargez d'abord la page. Si le problème persiste, restaurez votre dernière sauvegarde."
+    : "Aucune donnée n'a été trouvée sur cet appareil. S'il s'agit d'une <b>nouvelle installation</b>, démarrez à vide. Sinon (le navigateur a pu effacer le stockage), <b>restaurez votre sauvegarde la plus récente</b> — fichier .json ou copie en ligne — pour tout récupérer.";
+  scrB.innerHTML = `
+    <div style="max-width:560px;margin:18px auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:rgba(240,168,48,.06)">
+      <h2 class="display" style="margin-top:0">${titre}</h2>
+      <p style="line-height:1.6;color:var(--ink-soft)">${expl}</p>
+      <button class="btn btn-block" onclick="location.reload()">🔄 Réessayer (recharger la page)</button>
+      <div style="margin:16px 0;border-top:1px solid var(--line)"></div>
+      <p style="font-weight:600;margin-bottom:8px">📂 Restaurer un fichier de sauvegarde (.json)</p>
+      <input type="file" id="bootRestoreFile" accept=".json" style="display:none" onchange="importerSauvegardeAuBoot(this.files[0])">
+      <button class="btn btn-block" onclick="document.getElementById('bootRestoreFile').click()">Choisir une sauvegarde .json</button>
+      <div style="margin:16px 0;border-top:1px solid var(--line)"></div>
+      <p style="font-weight:600;margin-bottom:8px">☁️ Restaurer depuis la copie en ligne</p>
+      <div class="field"><span>Email partagé</span><input id="bootEmail" type="email" placeholder="email de synchro"></div>
+      <div class="field"><span>Mot de passe partagé</span><input id="bootPwd" type="password" placeholder="mot de passe"></div>
+      <button class="btn btn-block" onclick="Cloud.restoreBoot(document.getElementById('bootEmail').value, document.getElementById('bootPwd').value)">Restaurer depuis le cloud</button>
+      ${bloque ? "" : `
+      <div style="margin:16px 0;border-top:1px solid var(--line)"></div>
+      <button class="btn btn-ghost btn-block" onclick="if(confirm('Démarrer à VIDE ? À ne faire que pour une nouvelle installation. Si vous aviez des données, elles ne seront PAS récupérées par cette action.')) demarrerAVide()">🆕 Nouvelle installation (démarrer à vide)</button>`}
+    </div>`;
+}
+
 (async function demarrer(){
   await loadDB();   // charge depuis IndexedDB (avec migration de l'ancien localStorage si besoin)
-  // RÈGLE 3 : au démarrage, clôturer les départs oubliés des journées déjà écoulées
-  cloturerJoursEcoules(App.currentDate);
-  tickClock(); setInterval(tickClock,1000);
-  // Au réveil de la tablette / retour sur l'onglet, recaler immédiatement le jour
-  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) tickClock(); });
-  window.addEventListener("focus", tickClock);
-  App.showBadge();
-  // Rappel de sauvegarde mensuelle : on note au journal si elle est due
-  try{ App.verifierRappelSauvegarde(); }catch(e){}
+  if(_storageBlocked){ afficherEcranSecours("blocked"); return; }
+  if(_storageEmpty){   afficherEcranSecours("empty");   return; }
+  bootNormalApresRecuperation();
 })();
 </script>
 <script>
@@ -3914,6 +4042,38 @@ const Cloud = {
   setRole(r) { try { localStorage.setItem("cloud_role", r); } catch (e) {} this.renderPanel(); },
   lastSync() { try { return localStorage.getItem("cloud_last_sync") || ""; } catch (e) { return ""; } },
   _stamp() { try { localStorage.setItem("cloud_last_sync", new Date().toISOString()); } catch (e) {} },
+
+  /* Sauvegarde en ligne silencieuse (appelée automatiquement sur la tablette). */
+  async autoPush() {
+    try {
+      if (this.getRole() !== "tablette") return;
+      if (!navigator.onLine) return;
+      const sb = this.client(); if (!sb) return;
+      const s = await this._session(); if (!s) return;
+      const { error } = await sb.from("badgeuse").upsert({ id: CLOUD_ROW, data: DB, updated_at: new Date().toISOString(), updated_by: (s.user && s.user.email) || "tablette" });
+      if (!error) this._stamp();
+    } catch (e) {}
+  },
+
+  /* Restauration depuis la copie en ligne, utilisée par l'écran de secours au démarrage. */
+  async restoreBoot(email, pwd) {
+    const sb = this.client();
+    if (!sb) { toast("Synchro non chargée — connectez-vous à internet puis réessayez.", "err"); return; }
+    if (!email || !pwd) { toast("Renseignez l'email et le mot de passe.", "err"); return; }
+    try {
+      const { error: e1 } = await sb.auth.signInWithPassword({ email: email.trim(), password: pwd });
+      if (e1) { toast("Connexion refusée : " + e1.message, "err"); return; }
+      const { data, error } = await sb.from("badgeuse").select("data,updated_at").eq("id", CLOUD_ROW).maybeSingle();
+      if (error) { toast("Récupération échouée : " + error.message, "err"); return; }
+      if (!data || !data.data) { toast("Aucune donnée en ligne à restaurer.", "err"); return; }
+      _storageBlocked = false; _storageEmpty = false;
+      DB = data.data; _gardeFousDB();
+      saveDB(); this._stamp();
+      toast("Données restaurées depuis le cloud ✓", "ok");
+      try { logAction("Système", "Restauration cloud au démarrage", ""); } catch (e) {}
+      bootNormalApresRecuperation();
+    } catch (e) { toast("Erreur : " + (e.message || e), "err"); }
+  },
 
   /* Session locale (lecture dans le stockage, sans appel reseau) */
   async _session() {
