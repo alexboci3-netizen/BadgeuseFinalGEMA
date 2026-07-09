@@ -3938,16 +3938,23 @@ function bootNormalApresRecuperation(){
     _clockStarted = true;
     tickClock(); setInterval(tickClock,1000);
     document.addEventListener("visibilitychange", ()=>{
-      if(!document.hidden){ tickClock(); }
-      else { try{ if(typeof Cloud!=="undefined") Cloud.autoPush(); }catch(e){} }  // sauvegarde en ligne à la fermeture
+      if(!document.hidden){
+        tickClock();
+        try{ if(typeof Cloud!=="undefined") Cloud.autoPull(); }catch(e){}   // consultation : réactualise en revenant sur l'app
+      } else {
+        try{ if(typeof Cloud!=="undefined") Cloud.autoPush(); }catch(e){}    // tablette : sauvegarde en ligne à la fermeture
+      }
     });
-    window.addEventListener("focus", tickClock);
+    window.addEventListener("focus", ()=>{ tickClock(); try{ if(typeof Cloud!=="undefined") Cloud.autoPull(); }catch(e){} });
     // Sauvegarde en ligne périodique (tablette) : filet de sécurité contre une purge du stockage
     setInterval(()=>{ try{ planifierSauvegardeCloud(); }catch(e){} }, 10*60*1000);
+    // Récupération périodique (consultation) : la page se réactualise seule, sans fermer l'app
+    setInterval(()=>{ try{ if(typeof Cloud!=="undefined") Cloud.autoPull(); }catch(e){} }, 60*1000);
   }
   App.showBadge();
   try{ App.verifierRappelSauvegarde(); }catch(e){}
   try{ verifierEspaceStockage(); }catch(e){}
+  try{ if(typeof Cloud!=="undefined") Cloud.autoPull(); }catch(e){}          // 1re récupération au démarrage (consultation)
 }
 
 /* Nouvelle installation confirmée : on part à vide et on enregistre. */
@@ -4145,11 +4152,39 @@ const Cloud = {
       if (!DB.settings.emailjs) DB.settings.emailjs = { serviceId: "", templateId: "", publicKey: "" };
       saveDB();
       this._stamp();
+      this._lastPulledStamp = data.updated_at || "";
       const quand = data.updated_at ? new Date(data.updated_at).toLocaleString("fr-FR") : "?";
       toast("Données récupérées depuis le cloud ✓ (version du " + quand + ")", "ok");
       try { logAction("Synchro", "Récupération cloud", "Données locales remplacées par la version en ligne"); } catch (e) {}
-      App.renderAdminPanel();
+      this._refreshUI();
     } catch (e) { toast("Erreur de récupération : " + (e.message || e), "err"); }
+  },
+
+  /* Récupération AUTOMATIQUE et silencieuse (appareils de consultation). Rafraîchit
+     l'écran affiché sans qu'on ait besoin de fermer/rouvrir l'app. Ne fait rien si
+     rien n'a changé en ligne, pour éviter tout clignotement. */
+  _lastPulledStamp: "",
+  async autoPull() {
+    try {
+      if (this.getRole() !== "lecture") return;     // seuls les appareils de consultation récupèrent auto
+      if (!navigator.onLine) return;
+      const sb = this.client(); if (!sb) return;
+      const s = await this._session(); if (!s) return;
+      const { data, error } = await sb.from("badgeuse").select("data,updated_at").eq("id", CLOUD_ROW).maybeSingle();
+      if (error || !data || !data.data) return;
+      if (data.updated_at && data.updated_at === this._lastPulledStamp) return;   // rien de neuf
+      this._lastPulledStamp = data.updated_at || "";
+      DB = data.data; _gardeFousDB(); saveDB(); this._stamp();
+      this._refreshUI();
+    } catch (e) {}
+  },
+
+  /* Réaffiche l'écran courant (badge ou gestion) après une mise à jour des données. */
+  _refreshUI() {
+    try {
+      if (App.session) { App.renderAdminPanel(); }
+      else { App.showBadge(); }
+    } catch (e) {}
   },
 
   renderPanel() {
