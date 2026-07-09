@@ -2036,16 +2036,23 @@ const App = {
       const pa = paires[i];
       const titre = nb>1 ? `Service ${i+1}` : "Horaire";
       const departAuto = !!(pa && pa.outP && pa.outP.auto);
+      const inV = pa?(pa.in||''):'', outV = pa?(pa.out||''):'';
+      const autoNote = departAuto?`<div style="font-size:.74rem;color:var(--accent);margin:0 0 8px;line-height:1.45">⚠️ Départ <b>complété automatiquement</b> à la fin prévue (oubli de pointage). Vous pouvez le <b>rallonger</b> jusqu'à l'heure réelle de sortie pour compter les heures supplémentaires.</div>`:'';
       blocks += `
-        <div style="border:1px solid var(--line);border-radius:12px;padding:12px 12px 2px;margin-bottom:10px">
-          <div style="font-weight:600;font-size:.85rem;margin-bottom:6px">${titre}${pr?` <span style="color:var(--ink-dim);font-weight:400">· prévu ${pr.debut}–${pr.fin}</span>`:''}</div>
-          <div class="row" style="gap:10px">
-            <label class="field" style="flex:1;min-width:120px"><span>Arrivée</span>
-              <input type="time" id="edIn${i}" value="${pa?(pa.in||''):''}"></label>
-            <label class="field" style="flex:1;min-width:120px"><span>Départ</span>
-              <input type="time" id="edOut${i}" value="${pa?(pa.out||''):''}"></label>
+        <div id="edServiceBlock${i}" data-in="${inV}" data-out="${outV}" data-auto="${autoNote?'1':''}" style="border:1px solid var(--line);border-radius:12px;padding:12px 12px 2px;margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="font-weight:600;font-size:.85rem">${titre}${pr?` <span style="color:var(--ink-dim);font-weight:400">· prévu ${pr.debut}–${pr.fin}</span>`:''}</span>
+            ${nb>1?`<button class="btn btn-ghost btn-sm" style="padding:2px 8px;flex:none" onclick="App.supprimerServiceEdit(${i})">🗑️ Supprimer</button>`:''}
           </div>
-          ${departAuto?`<div style="font-size:.74rem;color:var(--accent);margin:0 0 8px;line-height:1.45">⚠️ Départ <b>complété automatiquement</b> à la fin prévue (oubli de pointage). Vous pouvez le <b>rallonger</b> jusqu'à l'heure réelle de sortie pour compter les heures supplémentaires.</div>`:''}
+          <div id="edBody${i}">
+            <div class="row" style="gap:10px">
+              <label class="field" style="flex:1;min-width:120px"><span>Arrivée</span>
+                <input type="time" id="edIn${i}" value="${inV}"></label>
+              <label class="field" style="flex:1;min-width:120px"><span>Départ</span>
+                <input type="time" id="edOut${i}" value="${outV}"></label>
+            </div>
+            ${autoNote}
+          </div>
         </div>`;
     }
     openModal(`
@@ -2056,11 +2063,33 @@ const App = {
       <label class="field"><span>Commentaire (obligatoire) — motif précis de la modification</span>
         <textarea id="edComment" placeholder="Ex. : oubli de pointage le midi, badgé manuellement après vérification"></textarea></label>
       <p style="font-size:.76rem;color:var(--ink-dim);margin:-6px 0 14px;line-height:1.5">
-        ⚠️ Règles : pas d'heure dans le futur · l'arrivée peut être placée à l'heure réelle, même <b>avant</b> l'heure prévue (le temps compté démarre au plus tôt à l'heure prévue) · le départ ne peut qu'être <b>avancé</b> (impossible d'ajouter des heures) · <b>exception</b> : un départ complété automatiquement (oubli) peut être rallongé jusqu'à l'heure réelle de sortie · pour un renfort <b>sans horaire prévu</b>, l'arrivée ne peut qu'être retardée · laissez un service vide pour le supprimer.</p>
+        ⚠️ Règles : pas d'heure dans le futur · l'arrivée peut être placée à l'heure réelle, même <b>avant</b> l'heure prévue (le temps compté démarre au plus tôt à l'heure prévue) · le départ ne peut qu'être <b>avancé</b> (impossible d'ajouter des heures) · <b>exception</b> : un départ complété automatiquement (oubli) peut être rallongé jusqu'à l'heure réelle de sortie · pour un renfort <b>sans horaire prévu</b>, l'arrivée ne peut qu'être retardée · pour supprimer un service, utilisez <b>🗑️ Supprimer</b> (ou laissez-le vide).</p>
       <div class="row mt">
         <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
         <button class="btn btn-primary" onclick="App.saveEditPointage('${empId}')">Enregistrer</button>
       </div>`);
+  },
+  /* Supprime (vide) un service dans la fenêtre de modification : ses champs sont
+     effacés et le service ne sera pas ré-enregistré. Rétablissable avant de valider. */
+  supprimerServiceEdit(i) {
+    const inEl = document.getElementById("edIn"+i), outEl = document.getElementById("edOut"+i);
+    if (inEl) inEl.value = "";
+    if (outEl) outEl.value = "";
+    const body = document.getElementById("edBody"+i);
+    if (body) body.innerHTML = `<div style="padding:4px 2px 12px;color:var(--ink-soft);font-size:.85rem">🗑️ Service supprimé — il ne sera pas enregistré. <span class="pill-link" style="font-size:.85rem" onclick="App.retablirServiceEdit(${i})">Rétablir</span></div>`;
+  },
+  retablirServiceEdit(i) {
+    const block = document.getElementById("edServiceBlock"+i);
+    const body = document.getElementById("edBody"+i);
+    if (!block || !body) return;
+    const inV = block.dataset.in || "", outV = block.dataset.out || "";
+    body.innerHTML = `
+      <div class="row" style="gap:10px">
+        <label class="field" style="flex:1;min-width:120px"><span>Arrivée</span>
+          <input type="time" id="edIn${i}" value="${inV}"></label>
+        <label class="field" style="flex:1;min-width:120px"><span>Départ</span>
+          <input type="time" id="edOut${i}" value="${outV}"></label>
+      </div>`;
   },
   saveEditPointage(empId) {
     const e = emp(empId);
@@ -2135,6 +2164,9 @@ const App = {
     const who = emp(this.session.empId).nom;
     const detail = services.map((s,i)=>`S${i+1} ${s.old?(s.old.in||'—'):'—'}→${s.in||'—'} / ${s.old?(s.old.out||'—'):'—'}→${s.out||'—'}`).join(" · ");
     logAction(who, "Modification horaire", `${e.nom} — ${date} : ${detail}. Motif : ${comment}`);
+    // Ré-archive IMMÉDIATE du mois concerné (tablette) : l'archive en ligne reflète
+    // aussitôt la modification/suppression, sans attendre le passage périodique.
+    try { this.archiverMoisCloud(date.slice(0,7)); } catch(e) {}
     this.editCtx = null;
     closeModal();
     toast("Horaire(s) modifié(s) et journalisé(s).", "ok");
