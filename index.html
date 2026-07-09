@@ -3020,58 +3020,104 @@ const App = {
       const rows = data.map(r => `
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
           <span style="flex:1;min-width:70px;font-weight:600">📅 ${r.mois}</span>
-          <button class="btn btn-ghost btn-sm" onclick="App._telechargerMoisCloud('${r.mois}')">CSV paie</button>
-          <button class="btn btn-ghost btn-sm" onclick="App._telechargerSignaturesCloud('${r.mois}')">🖊️ Signatures</button>
-          <button class="btn btn-ghost btn-sm" onclick="App._telechargerJournalCloud('${r.mois}')">📝 Journal</button>
+          <button class="btn btn-ghost btn-sm" onclick="App._extraireCloud('${r.mois}','csv')">CSV paie</button>
+          <button class="btn btn-ghost btn-sm" onclick="App._extraireCloud('${r.mois}','signatures')">🖊️ Signatures</button>
+          <button class="btn btn-ghost btn-sm" onclick="App._extraireCloud('${r.mois}','journal')">📝 Journal</button>
         </div>`).join("");
       openModal(`<button class="modal-close" onclick="closeModal()">×</button>
         <h3>☁️ Extraire un mois depuis le cloud</h3>
-        <div class="modal-sub" style="margin-bottom:12px">Choisissez le mois, puis <b>CSV paie</b>, <b>Signatures</b> ou <b>Journal</b>. Rien n'est chargé sur cet appareil.</div>
+        <div class="modal-sub" style="margin-bottom:12px">Choisissez le mois, puis <b>CSV paie</b>, <b>Signatures</b> ou <b>Journal</b>. Pour la paie et les signatures, vous pourrez sélectionner les salariés. Rien n'est chargé sur cet appareil.</div>
         ${rows}`);
     } catch(e) { toast("Erreur : " + (e.message||e), "err"); }
   },
-  async _telechargerMoisCloud(mois) {
-    const sb = Cloud.client(); if (!sb) return;
+  /* ---- EXTRACTION CLOUD d'un mois : on récupère l'archive une fois, puis (pour
+     paie/signatures) on propose de choisir les salariés, comme l'export local. ---- */
+  async _extraireCloud(mois, type) {
+    const sb = Cloud.client(); if (!sb) { toast("Connectez-vous à internet, puis réessayez.", "err"); return; }
     try {
-      const { data, error } = await sb.from("archives_mois").select("csv").eq("mois", mois).maybeSingle();
+      const { data, error } = await sb.from("archives_mois").select("csv,snapshot").eq("mois", mois).maybeSingle();
       if (error) { toast("Erreur : " + error.message, "err"); return; }
-      if (!data || !data.csv) { toast("Ce mois n'a pas de CSV archivé.", "err"); return; }
-      downloadFile(data.csv, `pointages_${mois}.csv`, "text/csv");
-      toast("CSV du mois " + mois + " téléchargé ✓", "ok");
-      closeModal();
+      if (!data) { toast("Mois introuvable dans l'archive.", "err"); return; }
+      this._cloudExtract = { mois: mois, csv: data.csv || "", snap: data.snapshot || {} };
+      if (type === "journal") { this._telechargerJournalCloud(); return; }   // journal = tout le mois (comme en local)
+      this._selecteurSalariesCloud(type);
     } catch(e) { toast("Erreur : " + (e.message||e), "err"); }
   },
-  /* Signatures d'un mois archivé, récupérées depuis le cloud (mêmes colonnes/impression
-     que l'export local), sans rien charger sur cet appareil. */
-  async _telechargerSignaturesCloud(mois) {
-    const sb = Cloud.client(); if (!sb) return;
-    try {
-      const { data, error } = await sb.from("archives_mois").select("snapshot").eq("mois", mois).maybeSingle();
-      if (error) { toast("Erreur : " + error.message, "err"); return; }
-      const snap = data && data.snapshot;
-      const ptg = (snap && Array.isArray(snap.pointages) ? snap.pointages : [])
-        .filter(p => p && p.signature)
+
+  /* Sélecteur de salariés pour l'extraction cloud (mêmes cases à cocher que le local). */
+  _selecteurSalariesCloud(type) {
+    const ce = this._cloudExtract; if (!ce) return;
+    const snap = ce.snap || {};
+    let team = Array.isArray(snap.team) ? snap.team.slice() : [];
+    if (!team.length) {
+      const ids = [...new Set((snap.pointages||[]).map(p=>p.empId).filter(Boolean))];
+      team = ids.map(id => ({ id: id, nom: id, role: "" }));
+    }
+    team.sort((a,b)=> String(a.nom).localeCompare(String(b.nom),"fr"));
+    if (!team.length) { toast("Aucun salarié dans ce mois.", "err"); return; }
+    const rows = team.map(e=>`
+      <label style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--line);cursor:pointer">
+        <input type="checkbox" class="expChkCloud" value="${e.id}" checked style="width:18px;height:18px;flex:none">
+        <span style="flex:1">${e.nom}<span style="color:var(--ink-soft);font-size:.78rem"> · ${e.role||""}</span></span>
+      </label>`).join("");
+    const titre = type==="signatures" ? `🖊️ Signatures — ${ce.mois}` : `💾 CSV paie — ${ce.mois}`;
+    openModal(`
+      <button class="modal-close" onclick="closeModal()">×</button>
+      <h3>${titre}</h3>
+      <div class="modal-sub">Cochez les salariés à inclure (tout coché = tout le monde).</div>
+      <div class="row mb" style="gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.expChkCloud').forEach(c=>c.checked=true)">Tout cocher</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('.expChkCloud').forEach(c=>c.checked=false)">Tout décocher</button>
+      </div>
+      <div class="table-card" style="max-height:46vh;overflow:auto;padding:4px 12px">${rows}</div>
+      <div class="row mt">
+        <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="App._lancerExtractionCloud('${type}')">Télécharger</button>
+      </div>`);
+  },
+
+  _lancerExtractionCloud(type) {
+    const ce = this._cloudExtract; if (!ce) return;
+    const ids = [...document.querySelectorAll(".expChkCloud")].filter(c=>c.checked).map(c=>c.value);
+    if (!ids.length) { toast("Sélectionnez au moins un salarié.", "err"); return; }
+    const snap = ce.snap || {};
+    const team = Array.isArray(snap.team) ? snap.team : [];
+    const tous = (document.querySelectorAll(".expChkCloud").length === ids.length);
+    const idsSet = new Set(ids);
+    const suffixe = tous ? "" : (ids.length===1
+      ? "_" + String(((team.find(e=>e.id===ids[0])||{}).nom) || "1-salarie").replace(/[^A-Za-z0-9]+/g,"-")
+      : `_${ids.length}-salaries`);
+    if (type === "signatures") {
+      const ptg = (Array.isArray(snap.pointages)?snap.pointages:[])
+        .filter(p => p && p.signature && idsSet.has(p.empId))
         .sort((a,b)=> a.date===b.date ? ((a.ts||0)-(b.ts||0)) : (a.date<b.date?-1:1));
-      if (!ptg.length) { toast("Aucune signature archivée pour ce mois.", "err"); return; }
-      const html = this._signaturesAuditHTML(ptg, (snap && snap.team) || [], mois);
-      downloadFile(html, `signatures_audit_${mois}.html`, "text/html");
-      toast(`Signatures du mois ${mois} : ${ptg.length} signature(s) ✓`, "ok");
-      closeModal();
-    } catch(e) { toast("Erreur : " + (e.message||e), "err"); }
+      if (!ptg.length) { toast("Aucune signature pour cette sélection.", "err"); return; }
+      const html = this._signaturesAuditHTML(ptg, team, ce.mois);
+      downloadFile(html, `signatures_audit_${ce.mois}${suffixe}.html`, "text/html");
+      toast(`Signatures ${ce.mois} : ${ptg.length} signature(s) ✓`, "ok");
+    } else {
+      if (!ce.csv) { toast("Ce mois n'a pas de CSV archivé.", "err"); return; }
+      if (tous) { downloadFile(ce.csv, `pointages_${ce.mois}.csv`, "text/csv"); }
+      else {
+        const noms = new Set(team.filter(e=>idsSet.has(e.id)).map(e=>e.nom));
+        const lignes = ce.csv.split("\n");
+        const corps = lignes.slice(1).filter(l => l && noms.has(l.split(";")[1]));
+        if (!corps.length) { toast("Aucune ligne pour cette sélection.", "err"); return; }
+        downloadFile([lignes[0], ...corps].join("\n") + "\n", `pointages_${ce.mois}${suffixe}.csv`, "text/csv");
+      }
+      toast(`CSV paie ${ce.mois} téléchargé ✓`, "ok");
+    }
+    closeModal();
   },
-  /* Journal d'un mois archivé, récupéré depuis le cloud (même format CSV que la tablette). */
-  async _telechargerJournalCloud(mois) {
-    const sb = Cloud.client(); if (!sb) return;
-    try {
-      const { data, error } = await sb.from("archives_mois").select("snapshot").eq("mois", mois).maybeSingle();
-      if (error) { toast("Erreur : " + error.message, "err"); return; }
-      const j = (data && data.snapshot && Array.isArray(data.snapshot.journal)) ? data.snapshot.journal : [];
-      if (!j.length) { toast("Aucune entrée de journal archivée pour ce mois.", "err"); return; }
-      const csv = this._journalCSV(j);
-      downloadFile(csv, `journal_${mois}.csv`, "text/csv");
-      toast(`Journal du mois ${mois} : ${j.length} entrée(s) ✓`, "ok");
-      closeModal();
-    } catch(e) { toast("Erreur : " + (e.message||e), "err"); }
+
+  /* Journal d'un mois archivé (tout le mois, comme l'export local du journal). */
+  _telechargerJournalCloud() {
+    const ce = this._cloudExtract; if (!ce) return;
+    const j = (ce.snap && Array.isArray(ce.snap.journal)) ? ce.snap.journal : [];
+    if (!j.length) { toast("Aucune entrée de journal archivée pour ce mois.", "err"); return; }
+    downloadFile(this._journalCSV(j), `journal_${ce.mois}.csv`, "text/csv");
+    toast(`Journal ${ce.mois} : ${j.length} entrée(s) ✓`, "ok");
+    closeModal();
   },
 
   /* ---- ALLÈGEMENT DE LA TABLETTE ----
