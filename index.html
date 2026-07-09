@@ -337,8 +337,8 @@ const PAUSE_REPAS_MIN = 30; // seuil d'alerte (rouge) pour la pause repas
 /* Durée maximale plausible d'UN service (minutes). Au-delà, c'est presque
    toujours une saisie incohérente (ex. départ avant arrivée mal corrigé) :
    on refuse de compter une durée aberrante (~23 h) issue d'un passage minuit
-   appliqué à tort. 16 h couvre largement les services de nuit légitimes. */
-const MAX_SERVICE_MIN = 16 * 60;
+   appliqué à tort. 18 h couvre les longues amplitudes (ex. ouverture→fermeture). */
+const MAX_SERVICE_MIN = 18 * 60;
 
 /* ====================================================================
    GESTION SOUPLE DES SALARIÉS
@@ -2120,7 +2120,12 @@ const App = {
     DB.pointages = DB.pointages.filter(p=>!(p.empId===empId && p.date===date && (p.type==="in"||p.type==="out")));
     services.forEach(s=>{
       if (s.in)  this._pushPointage(empId, date, "in",  s.in,  s.old?s.old.inP:null);
-      if (s.out) this._pushPointage(empId, date, "out", s.out, s.old?s.old.outP:null);
+      if (s.out) {
+        // Service à cheval sur minuit : départ à/après minuit (heure de départ ≤ heure d'arrivée)
+        // -> on horodate le départ au LENDEMAIN pour qu'il reste apparié à son arrivée.
+        const franchitMinuit = s.in && hmToMin(s.out) <= hmToMin(s.in);
+        this._pushPointage(empId, date, "out", s.out, s.old?s.old.outP:null, franchitMinuit ? 1 : 0);
+      }
     });
 
     const aQqc = services.some(s=>s.in||s.out);
@@ -2135,12 +2140,14 @@ const App = {
     toast("Horaire(s) modifié(s) et journalisé(s).", "ok");
     this.renderAdminPanel();
   },
-  /* Ajoute un pointage (sans effacer les autres du même type) */
-  _pushPointage(empId, date, type, hm, existing) {
+  /* Ajoute un pointage (sans effacer les autres du même type).
+     dayOffset : décale le TS de n jours — utilisé pour un départ qui franchit minuit
+     (ex. service 07:00 → 00:00), afin qu'il se range APRÈS l'arrivée au tri par ts. */
+  _pushPointage(empId, date, type, hm, existing, dayOffset) {
     if (!hm) return;
     const [h,m] = hm.split(":").map(Number);
     const [y,mo,d] = date.split("-").map(Number);
-    const ts = new Date(y,mo-1,d,h,m).getTime();
+    const ts = new Date(y,mo-1,d+(dayOffset||0),h,m).getTime();
     DB.pointages.push({
       id:"p"+Date.now()+Math.random().toString(36).slice(2,5),
       empId, date, type, time:hm, ts,
