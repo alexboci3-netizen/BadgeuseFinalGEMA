@@ -699,6 +699,33 @@ function planifierSauvegardeCloud(){
   } catch(e) {}
 }
 
+/* Ne garde que les entrées d'un objet dont la clé (date AAAA-MM-JJ) est du mois voulu. */
+function _filtrerParMois(obj, mois){
+  const o = {};
+  if (obj) for (const k in obj){ if (typeof k === "string" && k.slice(0,7) === mois) o[k] = obj[k]; }
+  return o;
+}
+
+/* Programme l'archivage en ligne du mois courant + du mois précédent (tablette),
+   au plus une fois toutes les 20 min. Ainsi les mois terminés sont toujours conservés
+   en ligne AVANT tout allègement de la tablette. */
+let _archiveLast = 0;
+function planifierArchivageCloud(){
+  if (typeof Cloud === "undefined" || typeof App === "undefined") return;
+  try {
+    if (Cloud.getRole() !== "tablette") return;
+    if (!navigator.onLine) return;
+    const now = Date.now();
+    if (now - _archiveLast < 20*60*1000) return;
+    _archiveLast = now;
+    const moisCourant = todayISO().slice(0,7);
+    const dPrec = new Date(); dPrec.setDate(1); dPrec.setMonth(dPrec.getMonth()-1);
+    const moisPrec = todayISO(dPrec).slice(0,7);
+    App.archiverMoisCloud(moisCourant);
+    App.archiverMoisCloud(moisPrec);
+  } catch(e) {}
+}
+
 /* ---- Utilitaires date/heure ---- */
 function todayISO(d) {
   d = d || new Date();
@@ -2685,6 +2712,11 @@ const App = {
         <button class="btn btn-ghost" onclick="App.exportJournal()">📝 Exporter le journal (CSV)</button>
         <button class="btn btn-ghost" onclick="App.choisirSalariesExport('signatures')">🖊️ Signatures pour audit (HTML)</button>
       </div>
+      <div style="margin:16px 0 10px;border-top:1px solid var(--line)"></div>
+      <p style="font-size:.85rem;color:var(--ink-soft);margin-bottom:8px"><b>Mois passés (archivés en ligne)</b> — récupérés directement depuis le cloud, sans surcharger la tablette.</p>
+      <div class="row">
+        <button class="btn btn-ghost" onclick="App.exportDepuisCloud()">☁️ Extraire un mois depuis le cloud</button>
+      </div>
       <p style="color:var(--ink-soft);font-size:.82rem;margin-top:10px">Le CSV ne peut pas afficher les images : pour <b>voir</b> les signatures lors d'un audit, utilisez l'export <b>« Signatures pour audit (HTML) »</b> — il affiche chaque signature en image, et s'imprime en PDF.</p>
 
       <div class="mt" style="margin-top:26px;padding-top:20px;border-top:1px solid var(--line)">
@@ -2829,7 +2861,7 @@ const App = {
     closeModal();
     toast("Restauration annulée.", "ok");
   },
-  exportPointages(ids) {
+  exportPointages(ids, opts) {
     const idsSet = (ids && ids.length) ? new Set(ids) : null;
     let csv = "Date;Salarié;Rôle;Service n°;Prévu début;Prévu fin;Arrivée réelle;Départ réel;Pause repas;Temps travaillé jour;Ponctualité jour (min);Modifié par;Motif modification (direction);Commentaire comportement\n";
     const csvCom = (d,id)=>{ const c = DB.commentaires && DB.commentaires[d] && DB.commentaires[d][id] && DB.commentaires[d][id].texte;
@@ -2898,6 +2930,7 @@ const App = {
         });
       });
     });
+    if (opts && opts.returnString) return { csv, nbLignes };
     const suffixe = ((this.expFrom||this.expTo) ? `_${this.expFrom||"debut"}_au_${this.expTo||"fin"}` : "_tout") + this._suffixeSalaries(idsSet);
     downloadFile(csv, `pointages${suffixe}_${todayISO()}.csv`, "text/csv");
     toast(nbLignes ? `Export généré : ${nbLignes} ligne(s).` : "Export généré (aucune donnée pour la sélection).", "ok");
@@ -2907,6 +2940,59 @@ const App = {
     if (!idsSet) return "";
     if (idsSet.size === 1) { const e = emp([...idsSet][0]); return "_" + (e ? e.nom.replace(/[^A-Za-z0-9]+/g,"-") : "1-salarie"); }
     return `_${idsSet.size}-salaries`;
+  },
+
+  /* ---- ARCHIVAGE EN LIGNE d'un mois (tablette) : CSV de paie prêt + données brutes ----
+     Généré tant que la tablette a encore le mois, puis conservé sans limite dans le cloud. */
+  archiverMoisCloud(mois) {
+    try {
+      if (typeof Cloud === "undefined" || Cloud.getRole() !== "tablette") return;
+      if (!/^\d{4}-\d{2}$/.test(mois||"")) return;
+      // CSV du mois, sans perturber la plage d'export affichée
+      const cur = { from: this.expFrom, to: this.expTo };
+      this.expFrom = mois + "-01"; this.expTo = mois + "-31";
+      let csv = "";
+      try { const r = this.exportPointages(null, { returnString: true }); csv = r ? r.csv : ""; } catch(e) { csv = ""; }
+      this.expFrom = cur.from; this.expTo = cur.to;
+      // Données brutes du mois (pour les signatures et le détail)
+      const snap = {
+        pointages: (DB.pointages||[]).filter(p => p.date && p.date.slice(0,7) === mois),
+        planning: _filtrerParMois(DB.planning, mois),
+        absences: _filtrerParMois(DB.absences, mois),
+        commentaires: _filtrerParMois(DB.commentaires, mois),
+        team: DB.team || [], renforts: DB.renforts || {}, extras: DB.extras || {}
+      };
+      if (!snap.pointages.length && !Object.keys(snap.planning).length) return; // rien à archiver ce mois
+      Cloud.upsertArchive(mois, csv, snap);
+    } catch(e) {}
+  },
+
+  /* ---- EXTRACTION depuis le cloud : liste des mois archivés puis téléchargement ---- */
+  async exportDepuisCloud() {
+    if (typeof Cloud === "undefined") { toast("Synchro indisponible.", "err"); return; }
+    const sb = Cloud.client(); if (!sb) { toast("Connectez-vous à internet, puis réessayez.", "err"); return; }
+    const s = await Cloud._session(); if (!s) { toast("Connectez-vous d'abord dans l'onglet ☁️ Synchro.", "err"); return; }
+    try {
+      const { data, error } = await sb.from("archives_mois").select("mois,updated_at").order("mois", { ascending: false });
+      if (error) { toast("Erreur : " + error.message, "err"); return; }
+      if (!data || !data.length) { toast("Aucun mois archivé pour l'instant (l'archivage se fait depuis la tablette).", "err"); return; }
+      const rows = data.map(r => `<button class="btn btn-ghost btn-block" style="text-align:left" onclick="App._telechargerMoisCloud('${r.mois}')">📅 ${r.mois}</button>`).join("");
+      openModal(`<button class="modal-close" onclick="closeModal()">×</button>
+        <h3>☁️ Extraire un mois depuis le cloud</h3>
+        <div class="modal-sub" style="margin-bottom:12px">Choisissez le mois à télécharger (CSV de paie). Rien n'est chargé sur cet appareil.</div>
+        ${rows}`);
+    } catch(e) { toast("Erreur : " + (e.message||e), "err"); }
+  },
+  async _telechargerMoisCloud(mois) {
+    const sb = Cloud.client(); if (!sb) return;
+    try {
+      const { data, error } = await sb.from("archives_mois").select("csv").eq("mois", mois).maybeSingle();
+      if (error) { toast("Erreur : " + error.message, "err"); return; }
+      if (!data || !data.csv) { toast("Ce mois n'a pas de CSV archivé.", "err"); return; }
+      downloadFile(data.csv, `pointages_${mois}.csv`, "text/csv");
+      toast("CSV du mois " + mois + " téléchargé ✓", "ok");
+      closeModal();
+    } catch(e) { toast("Erreur : " + (e.message||e), "err"); }
   },
   /* Popup de sélection des salariés à exporter (sur la plage déjà choisie) */
   choisirSalariesExport(type) {
@@ -3943,6 +4029,7 @@ function bootNormalApresRecuperation(){
         try{ if(typeof Cloud!=="undefined") Cloud.autoPull(); }catch(e){}   // consultation : réactualise en revenant sur l'app
       } else {
         try{ if(typeof Cloud!=="undefined") Cloud.autoPush(); }catch(e){}    // tablette : sauvegarde en ligne à la fermeture
+        try{ planifierArchivageCloud(); }catch(e){}                          // tablette : archive les mois avant fermeture
       }
     });
     window.addEventListener("focus", ()=>{ tickClock(); try{ if(typeof Cloud!=="undefined") Cloud.autoPull(); }catch(e){} });
@@ -3950,11 +4037,14 @@ function bootNormalApresRecuperation(){
     setInterval(()=>{ try{ planifierSauvegardeCloud(); }catch(e){} }, 10*60*1000);
     // Récupération périodique (consultation) : la page se réactualise seule, sans fermer l'app
     setInterval(()=>{ try{ if(typeof Cloud!=="undefined") Cloud.autoPull(); }catch(e){} }, 60*1000);
+    // Archivage périodique des mois (tablette) : conservation durable dans le cloud
+    setInterval(()=>{ try{ planifierArchivageCloud(); }catch(e){} }, 20*60*1000);
   }
   App.showBadge();
   try{ App.verifierRappelSauvegarde(); }catch(e){}
   try{ verifierEspaceStockage(); }catch(e){}
   try{ if(typeof Cloud!=="undefined") Cloud.autoPull(); }catch(e){}          // 1re récupération au démarrage (consultation)
+  try{ planifierArchivageCloud(); }catch(e){}                                // 1er archivage au démarrage (tablette)
 }
 
 /* Nouvelle installation confirmée : on part à vide et on enregistre. */
@@ -4049,6 +4139,17 @@ const Cloud = {
   setRole(r) { try { localStorage.setItem("cloud_role", r); } catch (e) {} this.renderPanel(); },
   lastSync() { try { return localStorage.getItem("cloud_last_sync") || ""; } catch (e) { return ""; } },
   _stamp() { try { localStorage.setItem("cloud_last_sync", new Date().toISOString()); } catch (e) {} },
+
+  /* Écrit (ou met à jour) l'archive d'un mois : CSV de paie + données brutes. Tablette. */
+  async upsertArchive(mois, csv, snapshot) {
+    try {
+      if (this.getRole() !== "tablette") return;
+      if (!navigator.onLine) return;
+      const sb = this.client(); if (!sb) return;
+      const s = await this._session(); if (!s) return;
+      await sb.from("archives_mois").upsert({ mois: mois, csv: csv, snapshot: snapshot, updated_at: new Date().toISOString() });
+    } catch (e) {}
+  },
 
   /* Sauvegarde en ligne silencieuse (appelée automatiquement sur la tablette). */
   async autoPush() {
