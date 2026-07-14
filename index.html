@@ -522,18 +522,33 @@ function idbOpen() {
     let req;
     try { req = indexedDB.open(IDB_NAME, 1); } catch(e) { _idbKO = true; return reject(e); }
     req.onupgradeneeded = () => { try { req.result.createObjectStore(IDB_STORE); } catch(_){} };
-    req.onsuccess = () => { _idb = req.result; resolve(_idb); };
+    req.onsuccess = () => {
+      _idb = req.result;
+      /* iPadOS/Safari peut COUPER cette connexion quand l'app passe en arrière-plan.
+         Sans ces gestionnaires, on garderait une connexion morte en cache et toutes
+         les écritures échoueraient ensuite (faux message "mémoire pleine"). */
+      try {
+        _idb.onclose = () => { _idb = null; };
+        _idb.onversionchange = () => { try { _idb.close(); } catch(_){} _idb = null; };
+      } catch(_){}
+      resolve(_idb);
+    };
     req.onerror   = () => { _idbKO = true; reject(req.error); };
   });
 }
-function idbGet() {
+/* Ferme et oublie la connexion en cache (elle sera rouverte au prochain accès). */
+function idbReset() {
+  try { if (_idb) _idb.close(); } catch(_){}
+  _idb = null;
+}
+function _idbGetRaw() {
   return idbOpen().then(db => new Promise((resolve, reject) => {
     const r = db.transaction(IDB_STORE, "readonly").objectStore(IDB_STORE).get(IDB_KEY);
     r.onsuccess = () => resolve(r.result);
     r.onerror   = () => reject(r.error);
   }));
 }
-function idbSet(val) {
+function _idbSetRaw(val) {
   return idbOpen().then(db => new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, "readwrite");
     tx.objectStore(IDB_STORE).put(val, IDB_KEY);
@@ -541,6 +556,15 @@ function idbSet(val) {
     tx.onerror    = () => reject(tx.error || new Error("écriture IndexedDB échouée"));
     tx.onabort    = () => reject(tx.error || new Error("transaction IndexedDB annulée"));
   }));
+}
+/* Lecture/écriture avec UNE nouvelle tentative sur connexion fraîche : si la
+   connexion a été coupée par le système (app suspendue), le premier essai échoue,
+   on rouvre, et le second essai réussit. */
+function idbGet() {
+  return _idbGetRaw().catch(err => { idbReset(); return _idbGetRaw(); });
+}
+function idbSet(val) {
+  return _idbSetRaw(val).catch(err => { idbReset(); return _idbSetRaw(val); });
 }
 
 /* Compression de la signature : on réduit la résolution puis on exporte en
@@ -565,6 +589,9 @@ function compresserSignature(srcCanvas, maxW) {
    (on ne veut jamais écraser des données encore présentes par une base vide). */
 let _storageBlocked = false;   // lecture impossible (erreur) -> ne rien écraser
 let _storageEmpty   = false;   // aucune donnée -> demander avant de repartir à vide
+let _syncSuspendue  = false;   // la dernière session a fini en échec d'enregistrement :
+                               // AUCUN envoi vers le cloud tant que l'utilisateur n'a pas
+                               // choisi (récupérer la version en ligne, ou continuer)
 
 function freshDB() {
   return {
@@ -652,25 +679,60 @@ function checkAutoUnlock() {
 }
 
 let _saving = false, _savePending = false;
+
+/* ---- Marqueur PERSISTANT d'échec d'enregistrement ----
+   Minuscule (quelques octets : tient toujours dans localStorage, même saturé).
+   Tant qu'il existe, on sait que la dernière session n'a pas pu tout enregistrer :
+   au prochain démarrage, la synchro est bloquée et on propose de récupérer la
+   version en ligne au lieu de l'écraser avec des données périmées. */
+const SAVE_KO_KEY = "badgeuse_save_ko";
+function _marquerEchecSauvegarde(){ try { localStorage.setItem(SAVE_KO_KEY, new Date().toISOString()); } catch(_){} }
+function _effacerEchecSauvegarde(){ try { localStorage.removeItem(SAVE_KO_KEY); } catch(_){} }
+function _dateEchecSauvegarde(){ try { return localStorage.getItem(SAVE_KO_KEY) || ""; } catch(_) { return ""; } }
+
+/* Échec définitif d'un enregistrement local : la version EN MÉMOIRE est encore
+   bonne à cet instant -> on l'envoie IMMÉDIATEMENT en ligne (si internet), on pose
+   le marqueur, et on prévient clairement. */
+function _sauvegardeLocaleEnEchec(){
+  _marquerEchecSauvegarde();
+  let tente = false;
+  try {
+    if (typeof Cloud !== "undefined") {
+      tente = true;
+      Cloud.pushUrgence().then((ok) => {
+        if (ok) toast("⚠️ Enregistrement local impossible, mais une copie de secours vient d'être envoyée en ligne ✓. Au prochain démarrage, l'app vous proposera de récupérer cette copie.", "err");
+        else    toast("⚠️ Enregistrement local impossible ET copie en ligne impossible pour l'instant. NE FERMEZ PAS l'app : exportez tout de suite une sauvegarde (.json) depuis 💾 Export, ou connectez la tablette à internet.", "err");
+      }).catch(() => {
+        toast("⚠️ Enregistrement local impossible ET envoi en ligne échoué. NE FERMEZ PAS l'app : exportez tout de suite une sauvegarde (.json) depuis 💾 Export.", "err");
+      });
+    }
+  } catch(_){}
+  if (!tente) {
+    toast("⚠️ Enregistrement local impossible (stockage indisponible ou plein). NE FERMEZ PAS l'app : exportez une sauvegarde (.json) depuis 💾 Export.", "err");
+  }
+}
+
 function saveDB() {
   // SÉCURITÉ : ne jamais écrire tant qu'un problème de stockage n'est pas résolu
   // (évite d'écraser des données encore présentes par une base vide).
   if (_storageBlocked || _storageEmpty) return;
   try { planifierSauvegardeCloud(); } catch(e) {}   // sauvegarde en ligne (tablette), best-effort
   // Persistance asynchrone en IndexedDB, avec coalescence (une écriture à la fois).
-  if (_idbKO) return _saveFallback();
+  if (typeof indexedDB === "undefined") return _saveFallback();
   if (_saving) { _savePending = true; return; }
   _saving = true;
   idbSet(DB).then(() => {
     _saving = false;
+    _effacerEchecSauvegarde();     // l'enregistrement local fonctionne à nouveau
     if (_savePending) { _savePending = false; saveDB(); }
   }).catch(() => {
     _saving = false;
-    // IndexedDB plein : on allège le journal (dernier recours) puis on retente une fois
+    // Échec malgré la reconnexion automatique : on allège le journal (dernier
+    // recours, cas d'un stockage réellement plein) puis on retente une fois
     if (DB.journal && DB.journal.length > 1500) {
       DB.journal = DB.journal.slice(0, 1500);
       idbSet(DB)
-        .then(() => toast("Mémoire de l'appareil pleine : le journal a été réduit aux 1500 actions les plus récentes pour pouvoir enregistrer. Exportez une sauvegarde (.json) dès que possible.", "err"))
+        .then(() => { _effacerEchecSauvegarde(); toast("Stockage presque plein : le journal a été réduit aux 1500 actions les plus récentes pour pouvoir enregistrer. Exportez une sauvegarde (.json) dès que possible.", "err"); })
         .catch(() => _saveFallback());
     } else {
       _saveFallback();
@@ -679,9 +741,12 @@ function saveDB() {
 }
 function _saveFallback() {
   // repli localStorage (petite capacité) si IndexedDB est indisponible
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(DB));
+    _effacerEchecSauvegarde();
+  }
   catch(e) {
-    toast("Mémoire de l'appareil pleine : enregistrement impossible. Exportez vite une sauvegarde (.json), puis libérez de la place (archiver d'anciens salariés, exporter puis effacer d'anciens mois).", "err");
+    _sauvegardeLocaleEnEchec();
   }
 }
 
@@ -691,6 +756,7 @@ function _saveFallback() {
 let _cloudPushTimer = null;
 function planifierSauvegardeCloud(){
   if (typeof Cloud === "undefined") return;
+  if (_syncSuspendue) return;   // dernière session en échec : ne rien envoyer
   try {
     if (Cloud.getRole() !== "tablette") return;
     if (!navigator.onLine) return;
@@ -725,6 +791,7 @@ function moisAConserver(){
    en ligne AVANT tout allègement de la tablette. */
 let _archiveLast = 0;
 function planifierArchivageCloud(){
+  if (typeof _syncSuspendue !== "undefined" && _syncSuspendue) return;
   if (typeof Cloud === "undefined" || typeof App === "undefined") return;
   try {
     if (Cloud.getRole() !== "tablette") return;
@@ -744,6 +811,7 @@ function planifierArchivageCloud(){
    retirés), au plus une fois par heure, sur la tablette et en ligne. */
 let _allegLast = 0;
 function planifierAllegementCloud(){
+  if (typeof _syncSuspendue !== "undefined" && _syncSuspendue) return;
   if (typeof Cloud === "undefined" || typeof App === "undefined") return;
   try {
     if (Cloud.getRole() !== "tablette") return;
@@ -4402,10 +4470,58 @@ function afficherEcranSecours(mode){
     </div>`;
 }
 
+/* ====================================================================
+   REPRISE APRÈS ÉCHEC D'ENREGISTREMENT : la session précédente n'a pas pu
+   tout enregistrer sur la tablette -> les données locales sont peut-être
+   PÉRIMÉES, et la copie en ligne (envoyée en urgence) plus récente.
+   Toute la synchro montante est SUSPENDUE tant que l'utilisateur n'a pas
+   choisi, pour ne jamais écraser le cloud avec du périmé.
+   ==================================================================== */
+function afficherEcranReprise(){
+  const scrB = document.getElementById("scr-badge");
+  const scrA = document.getElementById("scr-admin");
+  if(scrA) scrA.classList.remove("active");
+  if(!scrB) return;
+  scrB.classList.add("active");
+  const quand = _dateEchecSauvegarde();
+  const quandTxt = quand ? new Date(quand).toLocaleString("fr-FR") : "";
+  scrB.innerHTML = `
+    <div style="max-width:560px;margin:18px auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:rgba(240,168,48,.06)">
+      <h2 class="display" style="margin-top:0">⚠️ La dernière session n'a pas pu être enregistrée</h2>
+      <p style="line-height:1.6;color:var(--ink-soft)">
+        Lors de la dernière utilisation${quandTxt?` (le ${quandTxt})`:""}, la tablette n'a pas pu enregistrer les dernières actions.
+        Les données présentes sur la tablette sont donc peut-être <b>incomplètes</b>, alors que la <b>copie en ligne</b> est probablement plus récente
+        (une sauvegarde de secours a été tentée au moment du problème).
+        <b>Par sécurité, l'envoi vers le cloud est suspendu</b> tant que vous n'avez pas choisi.</p>
+      <p style="font-weight:600;margin-bottom:8px">Recommandé :</p>
+      <button class="btn btn-block" onclick="Cloud.reprisePull()">☁️ Récupérer la version en ligne</button>
+      <div class="field" style="margin-top:10px"><span>Email (si demandé)</span><input id="repEmail" type="email" placeholder="email de synchro"></div>
+      <div class="field"><span>Mot de passe (si demandé)</span><input id="repPwd" type="password" placeholder="mot de passe"></div>
+      <div style="margin:16px 0;border-top:1px solid var(--line)"></div>
+      <button class="btn btn-ghost btn-block" onclick="Cloud.telechargerCopieEnLigne()">💾 Télécharger la copie en ligne (.json) sans rien changer</button>
+      <div style="margin:16px 0;border-top:1px solid var(--line)"></div>
+      <button class="btn btn-ghost btn-block" onclick="if(confirm('Continuer avec les données de la TABLETTE ?\\n\\nSi la copie en ligne était plus récente, elle sera remplacée par celles-ci à la prochaine synchronisation. À ne choisir que si vous êtes sûr que la tablette est à jour, ou si vous êtes hors-ligne et devez pointer maintenant.')) continuerApresEchec()">▶️ Continuer avec les données de la tablette</button>
+      <button class="btn btn-ghost btn-block" style="margin-top:8px" onclick="location.reload()">🔄 Recharger la page</button>
+    </div>`;
+}
+
+/* Choix "continuer avec le local" : on lève la suspension et on repart. */
+function continuerApresEchec(){
+  _effacerEchecSauvegarde();
+  _syncSuspendue = false;
+  try{ logAction("Système","Reprise après échec d'enregistrement","Poursuite avec les données locales"); }catch(e){}
+  bootNormalApresRecuperation();
+}
+
 (async function demarrer(){
   await loadDB();   // charge depuis IndexedDB (avec migration de l'ancien localStorage si besoin)
   if(_storageBlocked){ afficherEcranSecours("blocked"); return; }
   if(_storageEmpty){   afficherEcranSecours("empty");   return; }
+  if(_dateEchecSauvegarde()){          // la dernière session a fini en échec d'enregistrement
+    _syncSuspendue = true;             // aucun envoi cloud tant que l'utilisateur n'a pas choisi
+    afficherEcranReprise();
+    return;
+  }
   bootNormalApresRecuperation();
 })();
 </script>
@@ -4441,6 +4557,7 @@ const Cloud = {
   /* Écrit (ou met à jour) l'archive d'un mois : CSV de paie + données brutes. Tablette. */
   async upsertArchive(mois, csv, snapshot) {
     try {
+      if (typeof _syncSuspendue !== "undefined" && _syncSuspendue) return;
       if (this.getRole() !== "tablette") return;
       if (!navigator.onLine) return;
       const sb = this.client(); if (!sb) return;
@@ -4452,6 +4569,7 @@ const Cloud = {
   /* Version ATTENDABLE : renvoie true seulement si l'écriture en ligne a réussi. */
   async upsertArchiveAsync(mois, csv, snapshot) {
     try {
+      if (typeof _syncSuspendue !== "undefined" && _syncSuspendue) return false;
       if (this.getRole() !== "tablette") return false;
       if (!navigator.onLine) return false;
       const sb = this.client(); if (!sb) return false;
@@ -4477,6 +4595,7 @@ const Cloud = {
   /* Sauvegarde en ligne silencieuse (appelée automatiquement sur la tablette). */
   async autoPush() {
     try {
+      if (typeof _syncSuspendue !== "undefined" && _syncSuspendue) return;
       if (this.getRole() !== "tablette") return;
       if (!navigator.onLine) return;
       const sb = this.client(); if (!sb) return;
@@ -4484,6 +4603,21 @@ const Cloud = {
       const { error } = await sb.from("badgeuse").upsert({ id: CLOUD_ROW, data: DB, updated_at: new Date().toISOString(), updated_by: (s.user && s.user.email) || "tablette" });
       if (!error) this._stamp();
     } catch (e) {}
+  },
+
+  /* Envoi D'URGENCE (échec d'enregistrement local) : ignore la suspension et le
+     minuteur, et renvoie true UNIQUEMENT si l'écriture en ligne est confirmée. */
+  async pushUrgence() {
+    try {
+      if (this.getRole() !== "tablette") return false;
+      if (!navigator.onLine) return false;
+      const sb = this.client(); if (!sb) return false;
+      const s = await this._session(); if (!s) return false;
+      const { error } = await sb.from("badgeuse").upsert({ id: CLOUD_ROW, data: DB, updated_at: new Date().toISOString(), updated_by: (s.user && s.user.email) || "tablette" });
+      if (error) return false;
+      this._stamp();
+      return true;
+    } catch (e) { return false; }
   },
 
   /* Restauration depuis la copie en ligne, utilisée par l'écran de secours au démarrage. */
@@ -4511,6 +4645,57 @@ const Cloud = {
     const sb = this.client(); if (!sb) return null;
     try { const { data } = await sb.auth.getSession(); return data ? data.session : null; }
     catch (e) { return null; }
+  },
+
+  /* Session existante, sinon connexion avec les identifiants de l'écran de reprise. */
+  async _sessionOuLogin(emailId, pwdId) {
+    let s = await this._session();
+    if (s) return s;
+    const sb = this.client(); if (!sb) return null;
+    const email = (document.getElementById(emailId)||{}).value || "";
+    const pwd   = (document.getElementById(pwdId)||{}).value || "";
+    if (!email || !pwd) { toast("La tablette n'est plus connectée à la synchro : renseignez l'email et le mot de passe ci-dessous, puis réessayez.", "err"); return null; }
+    const { error } = await sb.auth.signInWithPassword({ email: email.trim(), password: pwd });
+    if (error) { toast("Connexion refusée : " + error.message, "err"); return null; }
+    return await this._session();
+  },
+
+  /* Écran de reprise : RÉCUPÈRE la version en ligne (probablement la plus récente),
+     remplace le local, lève la suspension de synchro, et redémarre normalement. */
+  async reprisePull() {
+    if (!navigator.onLine) { toast("Hors-ligne : impossible de récupérer maintenant. Connectez la tablette à internet, ou choisissez « Continuer avec les données de la tablette ».", "err"); return; }
+    const sb = this.client(); if (!sb) { toast("Synchro non chargée — vérifiez la connexion internet puis rechargez la page.", "err"); return; }
+    const s = await this._sessionOuLogin("repEmail", "repPwd"); if (!s) return;
+    try {
+      const { data, error } = await sb.from("badgeuse").select("data,updated_at").eq("id", CLOUD_ROW).maybeSingle();
+      if (error) { toast("Récupération échouée : " + error.message, "err"); return; }
+      if (!data || !data.data) { toast("Aucune donnée en ligne. Choisissez « Continuer avec les données de la tablette ».", "err"); return; }
+      DB = data.data; _gardeFousDB();
+      _effacerEchecSauvegarde();
+      _syncSuspendue = false;
+      saveDB(); this._stamp();
+      this._lastPulledStamp = data.updated_at || "";
+      const quand = data.updated_at ? new Date(data.updated_at).toLocaleString("fr-FR") : "?";
+      toast("Version en ligne récupérée ✓ (du " + quand + ")", "ok");
+      try { logAction("Système", "Reprise après échec d'enregistrement", "Données remplacées par la version en ligne du " + quand); } catch (e) {}
+      bootNormalApresRecuperation();
+    } catch (e) { toast("Erreur : " + (e.message || e), "err"); }
+  },
+
+  /* Écran de reprise : télécharge la copie en ligne en .json, sans rien modifier.
+     Permet de comparer ou de mettre de côté avant de choisir. */
+  async telechargerCopieEnLigne() {
+    if (!navigator.onLine) { toast("Hors-ligne : impossible de télécharger la copie en ligne.", "err"); return; }
+    const sb = this.client(); if (!sb) { toast("Synchro non chargée — vérifiez la connexion internet puis rechargez la page.", "err"); return; }
+    const s = await this._sessionOuLogin("repEmail", "repPwd"); if (!s) return;
+    try {
+      const { data, error } = await sb.from("badgeuse").select("data,updated_at").eq("id", CLOUD_ROW).maybeSingle();
+      if (error) { toast("Téléchargement échoué : " + error.message, "err"); return; }
+      if (!data || !data.data) { toast("Aucune donnée en ligne pour l'instant.", "err"); return; }
+      const quand = (data.updated_at || "").replace(/[:T]/g, "-").slice(0, 16);
+      downloadFile(JSON.stringify(data.data), `copie_en_ligne_${quand || todayISO()}.json`, "application/json");
+      toast("Copie en ligne téléchargée ✓ (rien n'a été modifié)", "ok");
+    } catch (e) { toast("Erreur : " + (e.message || e), "err"); }
   },
 
   /* Ouverture de l'onglet : rendu immediat puis mise a jour de l'etat connecte */
@@ -4656,7 +4841,34 @@ const Cloud = {
     }
 
     html += `<p class="modal-sub" style="margin-top:14px;opacity:.85">Rappel : la <b>tablette</b> envoie les données ; les autres appareils <b>consultent</b>. Continuez à faire vos exports réguliers comme sauvegarde.</p>`;
+    html += `<div id="cloudStorageGauge" class="modal-sub" style="margin-top:6px;opacity:.85"></div>`;
     c.innerHTML = html;
+    this._renderStorageGauge();
+  },
+
+  /* Jauge de stockage : chiffres RÉELS (usage/quota de l'appareil) + poids
+     approximatif de la base et de la part des signatures. Best-effort. */
+  async _renderStorageGauge() {
+    const el = document.getElementById("cloudStorageGauge");
+    if (!el) return;
+    const mo = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " Mo" : Math.max(1, Math.round(n / 1024)) + " Ko");
+    let parts = [];
+    try {
+      if (navigator.storage && navigator.storage.estimate) {
+        const est = await navigator.storage.estimate();
+        if (est && est.quota) {
+          const pct = Math.round((est.usage / est.quota) * 100);
+          parts.push(`Stockage de l'appareil pour cette app : <b>${mo(est.usage || 0)}</b> utilisés sur ${mo(est.quota)} (<b>${pct}%</b>)`);
+        }
+      }
+    } catch (e) {}
+    try {
+      let sig = 0;
+      for (const p of (DB.pointages || [])) if (p.signature) sig += p.signature.length;
+      const total = JSON.stringify(DB).length;
+      parts.push(`Base badgeuse : ≈ <b>${mo(total)}</b>, dont signatures ≈ ${mo(sig)} (${(DB.pointages || []).length} pointages, ${(DB.journal || []).length} entrées de journal)`);
+    } catch (e) {}
+    el.innerHTML = parts.join("<br>");
   }
 };
 </script>
